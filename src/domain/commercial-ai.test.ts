@@ -13,6 +13,7 @@ import {
   validateGroundedCommercialOutput,
   type CommercialEvidenceCore,
 } from "./commercial-ai";
+import { CommercialAIProviderError, type CommercialAIProvider } from "../server/ai/providers/types";
 
 function fixtureCore(overrides: Partial<CommercialEvidenceCore> = {}): CommercialEvidenceCore {
   return {
@@ -62,6 +63,16 @@ function validOutput() {
   };
 }
 
+function failingProvider(code: "AI_RATE_LIMITED" | "AI_PROVIDER_ERROR"): CommercialAIProvider {
+  return {
+    providerName: "FIXTURE",
+    modelName: "fixture-model",
+    async generateCommercialAnalysis() {
+      throw new CommercialAIProviderError(code, "fixture failure");
+    },
+  };
+}
+
 test("builds a minimized evidence pack without raw HTML or provider payloads", () => {
   const pack = buildCommercialEvidencePack(fixtureCore());
   const serialized = JSON.stringify(pack);
@@ -80,6 +91,16 @@ test("resolved opportunities are unusable for AI generation", () => {
 test("suppression blocks generation before provider work", () => {
   const pack = buildCommercialEvidencePack(fixtureCore({ commercialState: { doNotContact: true, suppressed: false, prospectStage: "QUALIFIED", lastContactAt: null } }));
   assert.deepEqual(generationPreflight(pack), { ok: false, code: "CONTACT_SUPPRESSED" });
+});
+
+test("insufficient grounded evidence blocks AI generation", () => {
+  const core = fixtureCore();
+  core.website.objectiveFacts = [];
+  core.website.contacts = { whatsapp: false, phone: false, email: false, scheduling: false, form: false };
+  core.website.technologies = [];
+  core.currentSignals = [];
+  const pack = buildCommercialEvidencePack(core);
+  assert.deepEqual(generationPreflight(pack), { ok: false, code: "AI_INSUFFICIENT_EVIDENCE" });
 });
 
 test("valid structured output stays grounded to active opportunity and evidence references", () => {
@@ -150,6 +171,30 @@ test("unsupported technology claim is rejected", () => {
   const output = { ...validOutput(), messageDraft: "Vi que vocês usam Shopify no site e pensei em uma forma de melhorar a qualificação antes do contato. Pode fazer sentido conversar sobre isso?" };
   const result = validateGroundedCommercialOutput(pack, output);
   assert.deepEqual(result, { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_TECHNOLOGY" });
+});
+
+test("unsupported URL and unresolved placeholders are rejected", () => {
+  const pack = buildCommercialEvidencePack(fixtureCore());
+  const withUrl = validateGroundedCommercialOutput(pack, { ...validOutput(), messageDraft: "Vi o fluxo atual e pensei numa qualificação simples. Veja https://exemplo.com e me diga se faz sentido conversarmos sobre isso." });
+  assert.deepEqual(withUrl, { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_URL" });
+  const withPlaceholder = validateGroundedCommercialOutput(pack, { ...validOutput(), messageDraft: "Vi o fluxo da {{empresa}} e pensei numa qualificação antes do WhatsApp. Posso te mostrar uma forma simples de organizar isso?" });
+  assert.deepEqual(withPlaceholder, { ok: false, code: "AI_INVALID_OUTPUT", reason: "PLACEHOLDER" });
+});
+
+test("provider unavailable is surfaced through the provider contract", async () => {
+  const provider = failingProvider("AI_PROVIDER_ERROR");
+  await assert.rejects(
+    () => provider.generateCommercialAnalysis(buildCommercialEvidencePack(fixtureCore())),
+    (error: unknown) => error instanceof CommercialAIProviderError && error.code === "AI_PROVIDER_ERROR",
+  );
+});
+
+test("rate-limited provider is surfaced through the provider contract", async () => {
+  const provider = failingProvider("AI_RATE_LIMITED");
+  await assert.rejects(
+    () => provider.generateCommercialAnalysis(buildCommercialEvidencePack(fixtureCore())),
+    (error: unknown) => error instanceof CommercialAIProviderError && error.code === "AI_RATE_LIMITED",
+  );
 });
 
 test("manual edit is preserved when preparing existing ContactAttempt input", () => {
