@@ -13,6 +13,12 @@ const CHANNEL_LABELS = {
   OTHER: "Outro",
 } as const;
 
+const CONFIDENCE_LABELS = {
+  LOW: "Baixa",
+  MEDIUM: "Média",
+  HIGH: "Alta",
+} as const;
+
 type ContactChannel = keyof typeof CHANNEL_LABELS;
 
 type OpportunityView = {
@@ -104,7 +110,7 @@ export function CommercialApproachPanel(props: {
       }
       setPrepared(true);
       setEditing(false);
-      setFeedback("Rascunho preparado. O contato permanece em DRAFT e ainda não foi aprovado nem enviado.");
+      setFeedback("Rascunho preparado. O contato continua como rascunho e ainda não foi aprovado nem enviado.");
     });
   }
 
@@ -148,10 +154,10 @@ export function CommercialApproachPanel(props: {
 
       <div className="approach-grid">
         <div className="approach-block">
-          <span className="approach-label">Melhor oportunidade</span>
+          <span className="approach-label">Oportunidade prioritária pelo score</span>
           <strong>{props.activeOpportunity.problem}</strong>
           <p>{props.activeOpportunity.recommendedSolution}</p>
-          <div className="approach-score-row"><span>Lead Score</span><strong>{props.activeOpportunity.score}</strong></div>
+          <div className="approach-score-row"><span>Score comercial</span><strong>{props.activeOpportunity.score}</strong></div>
         </div>
 
         <div className="approach-block">
@@ -159,7 +165,7 @@ export function CommercialApproachPanel(props: {
           {visibleAnalysis && !stale ? (
             <>
               <p>{visibleAnalysis.commercialInterpretation}</p>
-              <div className="approach-confidence"><span>Confiança da IA</span><strong>{visibleAnalysis.confidence}</strong></div>
+              <div className="approach-confidence"><span>Confiança da IA</span><strong>{CONFIDENCE_LABELS[visibleAnalysis.confidence]}</strong></div>
             </>
           ) : stale && visibleAnalysis ? (
             <p className="subtle">A leitura anterior ficou desatualizada porque as evidências determinísticas mudaram. Gere novamente antes de reutilizá-la.</p>
