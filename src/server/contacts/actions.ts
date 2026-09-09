@@ -6,13 +6,14 @@ import { requireRole } from "@/lib/access";
 import {
   assertCanApproveContact,
   assertCanCreateFirstContact,
-  assertCanRegisterResponse,
   ContactWorkflowError,
+  responseTransition,
 } from "@/domain/contact-workflow";
 import {
   approveFirstContactSchema,
   createFirstContactSchema,
   registerResponseSchema,
+  takeOverConversationSchema,
   type ApproveFirstContactInput,
   type CreateFirstContactInput,
   type RegisterResponseInput,
@@ -24,7 +25,7 @@ export type ContactActionResult =
 
 function mapError(error: unknown, fallback: string): ContactActionResult {
   if (error instanceof ContactWorkflowError) return { ok: false, message: error.message };
-  console.error(fallback, { error });
+  console.error(fallback, { errorName: error instanceof Error ? error.name : "UnknownError" });
   return { ok: false, message: fallback };
 }
 
@@ -175,27 +176,39 @@ export async function registerProspectResponse(input: RegisterResponseInput): Pr
       if (!attempt) throw new ContactWorkflowError("Abordagem não encontrada.");
 
       if (attempt.status === "RESPONDED" && attempt.conversation) return attempt.conversation;
-      assertCanRegisterResponse(attempt.status);
 
-      const respondedAt = parsed.data.respondedAt ?? new Date();
-      const createdConversation = await tx.conversation.create({
-        data: {
+      const transition = responseTransition(attempt.status);
+      const requestedRespondedAt = parsed.data.respondedAt ?? new Date();
+      const currentConversation = await tx.conversation.upsert({
+        where: { contactAttemptId: attempt.id },
+        update: {},
+        create: {
           prospectId: attempt.prospectId,
           contactAttemptId: attempt.id,
-          status: "NEEDS_HUMAN",
+          status: transition.conversationStatus,
           responsePreview: parsed.data.responsePreview,
-          respondedAt,
+          respondedAt: requestedRespondedAt,
         },
       });
 
-      await tx.contactAttempt.update({
-        where: { id: attempt.id },
-        data: { status: "RESPONDED", respondedAt },
+      const contactTransition = await tx.contactAttempt.updateMany({
+        where: { id: attempt.id, status: { in: ["SENT", "DELIVERED"] } },
+        data: { status: transition.contactState, respondedAt: currentConversation.respondedAt },
       });
+
+      if (contactTransition.count === 0) return currentConversation;
+
       await tx.prospect.update({
         where: { id: attempt.prospectId },
-        data: { stage: "RESPONDED" },
+        data: { stage: transition.prospectStage },
       });
+
+      if (attempt.opportunityId) {
+        await tx.opportunity.update({
+          where: { id: attempt.opportunityId },
+          data: { status: transition.opportunityStatus },
+        });
+      }
 
       await tx.domainEvent.createMany({
         data: [
@@ -203,17 +216,18 @@ export async function registerProspectResponse(input: RegisterResponseInput): Pr
             type: "contact.responded",
             aggregateType: "contact_attempt",
             aggregateId: attempt.id,
-            payload: { prospectId: attempt.prospectId, conversationId: createdConversation.id },
+            payload: { prospectId: attempt.prospectId, conversationId: currentConversation.id },
             uniqueKey: `contact.responded:${attempt.id}`,
           },
           {
             type: "human_handoff.required",
             aggregateType: "conversation",
-            aggregateId: createdConversation.id,
+            aggregateId: currentConversation.id,
             payload: { prospectId: attempt.prospectId, contactAttemptId: attempt.id },
-            uniqueKey: `human_handoff.required:${createdConversation.id}`,
+            uniqueKey: `human_handoff.required:${currentConversation.id}`,
           },
         ],
+        skipDuplicates: true,
       });
 
       await tx.auditLog.create({
@@ -221,12 +235,12 @@ export async function registerProspectResponse(input: RegisterResponseInput): Pr
           actorId: session.user.id,
           action: "contact.response.register",
           entityType: "conversation",
-          entityId: createdConversation.id,
+          entityId: currentConversation.id,
           metadata: { prospectId: attempt.prospectId, contactAttemptId: attempt.id },
         },
       });
 
-      return createdConversation;
+      return currentConversation;
     });
 
     return { ok: true, id: conversation.id, message: "Resposta registrada. Atendimento humano necessário." };
@@ -237,12 +251,14 @@ export async function registerProspectResponse(input: RegisterResponseInput): Pr
 
 export async function takeOverConversation(formData: FormData): Promise<void> {
   const { session } = await requireRole(["OWNER", "ADMIN", "MANAGER", "SALES"]);
-  const conversationId = String(formData.get("conversationId") ?? "").trim();
-  if (!conversationId) return;
+  const parsed = takeOverConversationSchema.safeParse({
+    conversationId: formData.get("conversationId"),
+  });
+  if (!parsed.success) throw new ContactWorkflowError("Conversa inválida.");
 
   await prisma.$transaction(async (tx) => {
     const conversation = await tx.conversation.findUnique({
-      where: { id: conversationId },
+      where: { id: parsed.data.conversationId },
       select: { id: true, prospectId: true, status: true, humanTakenOverAt: true },
     });
     if (!conversation) throw new ContactWorkflowError("Conversa não encontrada.");
@@ -252,22 +268,33 @@ export async function takeOverConversation(formData: FormData): Promise<void> {
     }
 
     const takenOverAt = new Date();
-    await tx.conversation.update({
-      where: { id: conversation.id },
+    const claimed = await tx.conversation.updateMany({
+      where: { id: conversation.id, status: "NEEDS_HUMAN", humanTakenOverAt: null },
       data: { status: "IN_PROGRESS", humanTakenOverAt: takenOverAt },
     });
+
+    if (claimed.count === 0) {
+      const current = await tx.conversation.findUnique({
+        where: { id: conversation.id },
+        select: { status: true, humanTakenOverAt: true },
+      });
+      if (current?.status === "IN_PROGRESS" && current.humanTakenOverAt) return;
+      throw new ContactWorkflowError("Esta conversa não está mais disponível para assumir.");
+    }
+
     await tx.prospect.update({
       where: { id: conversation.prospectId },
       data: { stage: "IN_CONVERSATION" },
     });
-    await tx.domainEvent.create({
-      data: {
+    await tx.domainEvent.createMany({
+      data: [{
         type: "human_handoff.accepted",
         aggregateType: "conversation",
         aggregateId: conversation.id,
         payload: { prospectId: conversation.prospectId, userId: session.user.id },
         uniqueKey: `human_handoff.accepted:${conversation.id}`,
-      },
+      }],
+      skipDuplicates: true,
     });
     await tx.auditLog.create({
       data: {
