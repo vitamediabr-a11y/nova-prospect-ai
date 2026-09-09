@@ -242,13 +242,14 @@ async function persistAnalysisFailure(input: {
   status: AnalyzeCompanyWebsiteResult["status"];
   code: string;
   message: string;
+  facts?: WebsiteAnalysisFacts;
 }) {
-  const { company, actorId, analyzedAt, status, code, message } = input;
+  const { company, actorId, analyzedAt, status, code, message, facts } = input;
   await prisma.$transaction(async (tx) => {
     await tx.company.update({
       where: { id: company.id },
       data: {
-        websiteAnalysis: toJsonObject({ status, code, message, requestedUrl: company.website }),
+        websiteAnalysis: toJsonObject({ status, code, message, requestedUrl: company.website, facts }),
         websiteAnalyzedAt: analyzedAt,
       },
     });
@@ -311,8 +312,23 @@ export async function analyzeCompanyWebsite(input: AnalyzeCompanyWebsiteInput): 
   try {
     const response = await safeFetchHtml(company.website);
     const facts = analyzeWebsiteHtml(response);
-    const candidates = deriveWebsiteSignals(facts);
 
+    if (facts.status < 200 || facts.status >= 400) {
+      const message = `O site retornou HTTP ${facts.status}.`;
+      await persistAnalysisFailure({
+        company,
+        actorId: session.user.id,
+        analyzedAt,
+        status: "NOT_ANALYZABLE",
+        code: `HTTP_${facts.status}`,
+        message,
+        facts,
+      });
+      revalidatePath(`/empresas/${company.id}`);
+      return { ok: false, status: "NOT_ANALYZABLE", message };
+    }
+
+    const candidates = deriveWebsiteSignals(facts);
     await persistWebsiteResult({
       company,
       actorId: session.user.id,
