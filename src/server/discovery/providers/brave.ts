@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DISCOVERY_MAX_CANDIDATES } from "@/domain/discovery";
 import {
   DiscoveryProviderError,
   type DiscoveryProvider,
@@ -28,7 +29,7 @@ export class BraveSearchProvider implements DiscoveryProvider {
   }
 
   async search(input: DiscoverySearchInput): Promise<DiscoverySearchResult> {
-    const count = Math.max(1, Math.min(20, Math.trunc(input.limit)));
+    const count = Math.max(1, Math.min(DISCOVERY_MAX_CANDIDATES, Math.trunc(input.limit)));
     const url = new URL("https://api.search.brave.com/res/v1/web/search");
     url.searchParams.set("q", input.query);
     url.searchParams.set("count", String(count));
