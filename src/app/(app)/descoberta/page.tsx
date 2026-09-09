@@ -1,6 +1,7 @@
 import "./discovery.css";
 import Link from "next/link";
 import { DiscoveryForm } from "@/components/discovery-form";
+import { DISCOVERY_MAX_CANDIDATES, isDiscoveryRunStale } from "@/domain/discovery";
 import { requireSession } from "@/lib/access";
 import { prisma } from "@/lib/prisma";
 
@@ -21,8 +22,9 @@ function statusLabel(input: { outcome: string | null; analysisStatus: string | n
   return "Já existente";
 }
 
-function runStatusLabel(status: string) {
-  switch (status) {
+function runStatusLabel(run: { status: string; startedAt: Date | null }, now: Date) {
+  if (isDiscoveryRunStale(run, now)) return "Execução possivelmente interrompida";
+  switch (run.status) {
     case "RUNNING": return "Em execução";
     case "COMPLETED": return "Concluída";
     case "PARTIAL": return "Concluída parcialmente";
@@ -34,6 +36,7 @@ function runStatusLabel(status: string) {
 export default async function DiscoveryPage({ searchParams }: { searchParams: Promise<{ run?: string }> }) {
   const session = await requireSession();
   const { run: runId } = await searchParams;
+  const now = new Date();
   const configured = Boolean(process.env.BRAVE_SEARCH_API_KEY?.trim());
   const recentRuns = await prisma.discoveryRun.findMany({
     where: { createdById: session.user.id },
@@ -43,6 +46,7 @@ export default async function DiscoveryPage({ searchParams }: { searchParams: Pr
   const selectedRun = runId
     ? recentRuns.find((run) => run.id === runId) ?? await prisma.discoveryRun.findFirst({ where: { id: runId, createdById: session.user.id } })
     : recentRuns[0] ?? null;
+  const selectedRunStale = selectedRun ? isDiscoveryRunStale(selectedRun, now) : false;
 
   let acceptedRows: Array<{
     companyId: string;
@@ -101,7 +105,7 @@ export default async function DiscoveryPage({ searchParams }: { searchParams: Pr
       ) : null}
 
       <section className="section discovery-search-section">
-        <div className="section-heading"><h2>Nova busca</h2><span className="subtle">Máximo de 20 resultados por execução</span></div>
+        <div className="section-heading"><h2>Nova busca</h2><span className="subtle">Máximo de {DISCOVERY_MAX_CANDIDATES} resultados por execução</span></div>
         <DiscoveryForm configured={configured} />
       </section>
 
@@ -113,9 +117,10 @@ export default async function DiscoveryPage({ searchParams }: { searchParams: Pr
                 <h2>Resultado da busca</h2>
                 <p className="subtle discovery-query">{selectedRun.segment} · {selectedRun.location}{selectedRun.additionalTerms ? ` · ${selectedRun.additionalTerms}` : ""}</p>
               </div>
-              <span className="state-pill">{runStatusLabel(selectedRun.status)}</span>
+              <span className={selectedRunStale ? "state-pill resolved" : "state-pill"}>{runStatusLabel(selectedRun, now)}</span>
             </div>
             <p className="subtle">Fonte de descoberta: Brave Search. Os fatos exibidos abaixo vêm dos sites verificados, não de snippets do provedor.</p>
+            {selectedRunStale ? <p className="analysis-note">Esta execução pode ter sido interrompida antes de concluir. Ela não é apresentada como uma busca ainda ativa.</p> : null}
             <div className="discovery-metrics">
               <div><strong>{selectedRun.candidatesFound}</strong><span>URLs retornadas transitoriamente</span></div>
               <div><strong>{selectedRun.candidatesAccepted}</strong><span>sites comerciais verificados</span></div>
@@ -171,7 +176,7 @@ export default async function DiscoveryPage({ searchParams }: { searchParams: Pr
             {recentRuns.map((run) => (
               <Link className="compact-row" href={`/descoberta?run=${run.id}`} key={run.id}>
                 <div><strong>{run.segment} · {run.location}</strong><span>{run.createdAt.toLocaleString("pt-BR")}</span></div>
-                <span>{runStatusLabel(run.status)}</span>
+                <span>{runStatusLabel(run, now)}</span>
               </Link>
             ))}
           </div>
