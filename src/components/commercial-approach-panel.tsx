@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { generateCommercialApproach } from "@/server/ai/actions";
 import type { CommercialAnalysisView } from "@/server/ai/service";
 import { createFirstContactDraft } from "@/server/contacts/actions";
@@ -45,11 +45,6 @@ export function CommercialApproachPanel(props: {
   const [prepared, setPrepared] = useState(false);
   const [pending, startTransition] = useTransition();
 
-  const selectedOpportunity = useMemo(() => {
-    if (analysis && !analysis.stale && props.activeOpportunity?.id === analysis.opportunityId) return props.activeOpportunity;
-    return props.activeOpportunity;
-  }, [analysis, props.activeOpportunity]);
-
   function generate(regenerate: boolean) {
     setFeedback(null);
     setFeedbackError(false);
@@ -69,7 +64,7 @@ export function CommercialApproachPanel(props: {
   }
 
   function prepareContact() {
-    if (!props.prospectId || !selectedOpportunity) {
+    if (!props.prospectId || !props.activeOpportunity) {
       setFeedback("Não há prospect e oportunidade atual disponíveis para preparar o contato.");
       setFeedbackError(true);
       return;
@@ -90,9 +85,10 @@ export function CommercialApproachPanel(props: {
     setFeedbackError(false);
     startTransition(async () => {
       const currentAnalysis = analysis && !analysis.stale ? analysis : null;
+      const opportunityId = currentAnalysis?.opportunityId ?? props.activeOpportunity!.id;
       const result = await createFirstContactDraft({
         prospectId: props.prospectId!,
-        opportunityId: selectedOpportunity.id,
+        opportunityId,
         channel,
         messageDraft: trimmed,
         evidence: {
