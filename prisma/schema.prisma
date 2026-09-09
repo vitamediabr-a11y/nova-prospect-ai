@@ -260,6 +260,7 @@ model Opportunity {
   scoreBreakdown      Json
   priority            OpportunityPriority
   status              OpportunityStatus   @default(OPEN)
+  resolvedAt          DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -269,6 +270,7 @@ model Opportunity {
   contactAttempts ContactAttempt[]
 
   @@index([companyId, status])
+  @@index([companyId, resolvedAt])
   @@index([score])
   @@index([ownerId])
   @@map("opportunities")
