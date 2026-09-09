@@ -19,6 +19,10 @@ export const registerResponseSchema = z.object({
   respondedAt: z.coerce.date().optional(),
 });
 
+export const takeOverConversationSchema = z.object({
+  conversationId: z.string().trim().min(1),
+});
+
 export type CreateFirstContactInput = z.infer<typeof createFirstContactSchema>;
 export type ApproveFirstContactInput = z.infer<typeof approveFirstContactSchema>;
 export type RegisterResponseInput = z.infer<typeof registerResponseSchema>;
