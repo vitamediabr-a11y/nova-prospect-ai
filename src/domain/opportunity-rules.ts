@@ -26,10 +26,25 @@ const RULES: Record<string, OpportunitySuggestion> = {
     businessImpact: "Usuários podem abandonar o fluxo antes de concluir a ação comercial principal.",
     recommendedSolution: "Otimização mobile e de conversão",
   },
+  MISSING_VIEWPORT_META: {
+    problem: "A homepage não declara uma configuração de viewport para dispositivos móveis.",
+    businessImpact: "Sem essa configuração, navegadores móveis podem renderizar a página usando uma largura virtual de desktop.",
+    recommendedSolution: "Correção da base responsiva e revisão mobile-first",
+  },
+  NO_HOMEPAGE_FORM: {
+    problem: "Nenhum formulário foi detectado na homepage.",
+    businessImpact: "A homepage não oferece um formulário próprio como caminho de captura ou qualificação de contato.",
+    recommendedSolution: "Fluxo de conversão com formulário e qualificação",
+  },
   NO_ONLINE_SCHEDULING: {
     problem: "Não foi detectado um fluxo de agendamento online.",
     businessImpact: "O agendamento depende de troca manual de mensagens e aumenta o tempo operacional.",
     recommendedSolution: "Sistema de agendamento integrado",
+  },
+  NO_HOMEPAGE_SCHEDULING_LINK: {
+    problem: "Nenhum link de agendamento online foi detectado na homepage.",
+    businessImpact: "A homepage não oferece um atalho detectável para que o visitante marque um horário sem iniciar uma troca manual de mensagens.",
+    recommendedSolution: "Agendamento online integrado ao fluxo do site",
   },
   SLOW_WEBSITE: {
     problem: "O site apresenta desempenho abaixo do nível esperado.",
