@@ -1,4 +1,6 @@
 import {
+  DISCOVERY_CONCURRENCY,
+  DISCOVERY_MAX_CANDIDATES,
   companyDedupeKeyFromWebsite,
   evaluateDiscoveryCandidate,
   extractFirstPartyBusinessIdentity,
@@ -7,14 +9,18 @@ import {
   type FirstPartyBusinessIdentity,
 } from "@/domain/discovery";
 import { WebsiteSecurityError } from "@/domain/ssrf";
-import { analyzeWebsiteHtml } from "@/domain/website-analysis";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { safeFetchHtml, WebsiteFetchError } from "@/server/website/safe-fetch";
+import {
+  analyzeSafeWebsiteResponse,
+  type VerifiedWebsiteAnalysis,
+} from "@/server/website/service";
 import type { DiscoveryProvider } from "./providers/types";
 
 export type VerifiedBusiness = {
   identity: FirstPartyBusinessIdentity;
+  analysis: VerifiedWebsiteAnalysis;
 };
 
 export type AcceptedDiscoveryCompany = {
@@ -65,18 +71,21 @@ export type DiscoveryPipelineDependencies = {
   provider: DiscoveryProvider;
   verifyCandidate: (url: string) => Promise<VerifiedBusiness>;
   repository: DiscoveryRepository;
-  analyzeCompany: (companyId: string) => Promise<{ ok: boolean }>;
+  analyzeCompany: (companyId: string, analysis: VerifiedWebsiteAnalysis) => Promise<{ ok: boolean }>;
   now?: () => Date;
 };
 
 export async function verifyCandidateWebsite(url: string): Promise<VerifiedBusiness> {
   try {
     const response = await safeFetchHtml(url);
-    if (response.status < 200 || response.status >= 400) {
-      throw new CandidateVerificationError("CANDIDATE_NOT_ANALYZABLE", `O site retornou HTTP ${response.status}.`);
+    const analysis = analyzeSafeWebsiteResponse(response);
+    if (analysis.facts.status < 200 || analysis.facts.status >= 400) {
+      throw new CandidateVerificationError("CANDIDATE_NOT_ANALYZABLE", `O site retornou HTTP ${analysis.facts.status}.`);
     }
-    const facts = analyzeWebsiteHtml(response);
-    return { identity: extractFirstPartyBusinessIdentity({ html: response.html, facts }) };
+    return {
+      identity: extractFirstPartyBusinessIdentity({ html: response.html, facts: analysis.facts }),
+      analysis,
+    };
   } catch (error) {
     if (error instanceof CandidateVerificationError) throw error;
     if (error instanceof WebsiteSecurityError) {
@@ -89,10 +98,8 @@ export async function verifyCandidateWebsite(url: string): Promise<VerifiedBusin
   }
 }
 
-function companyIdentityConditions(identity: FirstPartyBusinessIdentity): Prisma.CompanyWhereInput[] {
-  const conditions: Prisma.CompanyWhereInput[] = [
-    { dedupeKey: companyDedupeKeyFromWebsite(identity.website) },
-  ];
+function softMatchConditions(identity: FirstPartyBusinessIdentity): Prisma.CompanyWhereInput[] {
+  const conditions: Prisma.CompanyWhereInput[] = [];
   if (identity.whatsapp) conditions.push({ whatsapp: identity.whatsapp });
   if (identity.email) conditions.push({ email: { equals: identity.email, mode: "insensitive" } });
   if (!identity.provisional && identity.location) {
@@ -106,15 +113,32 @@ function companyIdentityConditions(identity: FirstPartyBusinessIdentity): Prisma
   return conditions;
 }
 
+function softMatchEvidence(identity: FirstPartyBusinessIdentity) {
+  const evidence: string[] = [];
+  if (identity.whatsapp) evidence.push("WHATSAPP");
+  if (identity.email) evidence.push("EMAIL");
+  if (!identity.provisional && identity.location) evidence.push("NAME_LOCATION");
+  return evidence;
+}
+
 export function createPrismaDiscoveryRepository(): DiscoveryRepository {
   return {
     async acceptVerified({ identity, actorId, discoveryRunId }) {
       const dedupeKey = companyDedupeKeyFromWebsite(identity.website);
-      const existing = await prisma.company.findFirst({
-        where: { OR: companyIdentityConditions(identity) },
+      const existing = await prisma.company.findUnique({
+        where: { dedupeKey },
         select: { id: true, websiteAnalyzedAt: true },
       });
       if (existing) return { companyId: existing.id, isNew: false, websiteAnalyzedAt: existing.websiteAnalyzedAt };
+
+      const softConditions = softMatchConditions(identity);
+      const possibleDuplicates = softConditions.length > 0
+        ? await prisma.company.findMany({
+            where: { OR: softConditions },
+            select: { id: true },
+            take: 5,
+          })
+        : [];
 
       try {
         const company = await prisma.$transaction(async (tx) => {
@@ -154,9 +178,26 @@ export function createPrismaDiscoveryRepository(): DiscoveryRepository {
                 discoveryRunId,
                 identitySource: identity.identitySource,
                 provisional: identity.provisional,
+                possibleDuplicateCount: possibleDuplicates.length,
               },
             },
           });
+
+          if (possibleDuplicates.length > 0) {
+            await tx.auditLog.create({
+              data: {
+                actorId,
+                action: "discovery.possible_duplicate",
+                entityType: "company",
+                entityId: created.id,
+                metadata: {
+                  discoveryRunId,
+                  evidence: softMatchEvidence(identity),
+                  matchedCompanyIds: possibleDuplicates.map((company) => company.id),
+                },
+              },
+            });
+          }
 
           return created;
         });
@@ -212,7 +253,7 @@ export async function executeDiscoveryPipeline(input: {
 
   let searchResult;
   try {
-    searchResult = await deps.provider.search({ query: input.query, limit: input.limit });
+    searchResult = await deps.provider.search({ query: input.query, limit: Math.min(input.limit, DISCOVERY_MAX_CANDIDATES) });
     result.providerRequests = Math.max(1, searchResult.providerRequests);
   } catch (error) {
     const candidate = error as { code?: string; message?: string };
@@ -223,11 +264,12 @@ export async function executeDiscoveryPipeline(input: {
     return result;
   }
 
-  result.candidatesFound = searchResult.candidates.length;
-  const seenInputHosts = new Set<string>();
-  const seenVerifiedHosts = new Set<string>();
+  const providerCandidates = searchResult.candidates.slice(0, Math.min(input.limit, DISCOVERY_MAX_CANDIDATES));
+  result.candidatesFound = providerCandidates.length;
 
-  for (const candidate of searchResult.candidates) {
+  const seenInputHosts = new Set<string>();
+  const candidatesToVerify: Array<{ url: string }> = [];
+  for (const candidate of providerCandidates) {
     const decision = evaluateDiscoveryCandidate(candidate.url);
     if (!decision.accepted) {
       result.rejectedCandidates += 1;
@@ -238,25 +280,30 @@ export async function executeDiscoveryPipeline(input: {
       continue;
     }
     seenInputHosts.add(decision.hostname);
+    candidatesToVerify.push({ url: decision.url });
+  }
 
+  const seenVerifiedHosts = new Set<string>();
+  async function processCandidate(candidate: { url: string }) {
     let verified: VerifiedBusiness;
     try {
-      verified = await deps.verifyCandidate(decision.url);
+      verified = await deps.verifyCandidate(candidate.url);
     } catch (error) {
       if (error instanceof CandidateVerificationError && error.code === "CANDIDATE_BLOCKED") result.securityBlocked += 1;
       else result.failedCandidates += 1;
-      continue;
+      return;
     }
 
     const verifiedDecision = evaluateDiscoveryCandidate(verified.identity.website);
     if (!verifiedDecision.accepted) {
       result.rejectedCandidates += 1;
-      continue;
+      return;
     }
+
     const finalHost = normalizeBusinessHostname(verified.identity.website);
     if (seenVerifiedHosts.has(finalHost)) {
       result.duplicatesSkipped += 1;
-      continue;
+      return;
     }
     seenVerifiedHosts.add(finalHost);
 
@@ -272,7 +319,7 @@ export async function executeDiscoveryPipeline(input: {
 
       let analysisStatus: AcceptedDiscoveryCompany["analysisStatus"] = "FRESH";
       if (persisted.isNew || shouldRefreshWebsiteAnalysis(persisted.websiteAnalyzedAt, deps.now?.() ?? new Date())) {
-        const analysis = await deps.analyzeCompany(persisted.companyId);
+        const analysis = await deps.analyzeCompany(persisted.companyId, verified.analysis);
         analysisStatus = analysis.ok ? "ANALYZED" : "ANALYSIS_FAILED";
         if (!analysis.ok) result.failedCandidates += 1;
       }
@@ -291,5 +338,17 @@ export async function executeDiscoveryPipeline(input: {
     }
   }
 
+  let nextCandidate = 0;
+  async function worker() {
+    while (true) {
+      const index = nextCandidate;
+      nextCandidate += 1;
+      if (index >= candidatesToVerify.length) return;
+      await processCandidate(candidatesToVerify[index]);
+    }
+  }
+
+  const workerCount = Math.min(DISCOVERY_CONCURRENCY, candidatesToVerify.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return result;
 }
