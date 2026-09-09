@@ -37,7 +37,8 @@ export class GeminiCommercialAIProvider implements CommercialAIProvider {
         config: {
           systemInstruction: COMMERCIAL_AI_SYSTEM_INSTRUCTION,
           responseMimeType: "application/json",
-          responseSchema: COMMERCIAL_OUTPUT_JSON_SCHEMA,
+          responseJsonSchema: COMMERCIAL_OUTPUT_JSON_SCHEMA,
+          maxOutputTokens: 1200,
         },
       });
 
@@ -50,7 +51,7 @@ export class GeminiCommercialAIProvider implements CommercialAIProvider {
         throw new CommercialAIProviderError("AI_INVALID_OUTPUT", "The provider returned invalid JSON.");
       }
 
-      const usage = response.usageMetadata as Record<string, unknown> | undefined;
+      const usage = response.usageMetadata as unknown as Record<string, unknown> | undefined;
       return {
         output,
         provider: this.providerName,
