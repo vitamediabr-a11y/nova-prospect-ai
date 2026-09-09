@@ -52,6 +52,23 @@ try {
     assert.ok(tableNames.has(table), `Tabela ausente após migrate deploy: ${table}`);
   }
 
+  const columns = await client.query<{ table_name: string; column_name: string }>(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name IN ('companies', 'signals', 'opportunities')`,
+  );
+  const columnNames = new Set(columns.rows.map((row) => `${row.table_name}.${row.column_name}`));
+  for (const column of [
+    "companies.websiteAnalysis",
+    "companies.websiteAnalyzedAt",
+    "signals.lastObservedAt",
+    "signals.resolvedAt",
+    "opportunities.dedupeKey",
+  ]) {
+    assert.ok(columnNames.has(column), `Coluna de website intelligence ausente: ${column}`);
+  }
+
   const indexes = await client.query<{ indexname: string }>(
     "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
   );
@@ -61,6 +78,7 @@ try {
     "contact_attempts_idempotencyKey_key",
     "conversations_contactAttemptId_key",
     "domain_events_uniqueKey_key",
+    "opportunities_dedupeKey_key",
   ]) {
     assert.ok(indexNames.has(index), `Índice único crítico ausente: ${index}`);
   }
@@ -105,6 +123,18 @@ try {
          VALUES ('dbverify-conversation-2', 'dbverify-prospect-1', 'dbverify-contact-1', 'Resposta duplicada', NOW(), NOW())`,
       ),
       "conversa por primeira abordagem",
+    );
+
+    await client.query(
+      `INSERT INTO "opportunities" ("id", "companyId", "dedupeKey", "problem", "evidence", "businessImpact", "recommendedSolution", "score", "scoreBreakdown", "priority", "updatedAt")
+       VALUES ('dbverify-opportunity-1', 'dbverify-company-1', 'dbverify:opportunity', 'Problema', '{}'::jsonb, 'Impacto', 'Solução', 10, '{}'::jsonb, 'LOW', NOW())`,
+    );
+    await expectUniqueViolation(
+      () => client.query(
+        `INSERT INTO "opportunities" ("id", "companyId", "dedupeKey", "problem", "evidence", "businessImpact", "recommendedSolution", "score", "scoreBreakdown", "priority", "updatedAt")
+         VALUES ('dbverify-opportunity-2', 'dbverify-company-1', 'dbverify:opportunity', 'Outro', '{}'::jsonb, 'Impacto', 'Solução', 10, '{}'::jsonb, 'LOW', NOW())`,
+      ),
+      "idempotência de oportunidade",
     );
 
     await client.query(
