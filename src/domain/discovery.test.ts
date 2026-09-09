@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  DISCOVERY_CONCURRENCY,
+  DISCOVERY_MAX_CANDIDATES,
   buildDiscoveryQuery,
   companyDedupeKeyFromWebsite,
   evaluateDiscoveryCandidate,
   extractFirstPartyBusinessIdentity,
+  isDiscoveryRunStale,
   normalizeBusinessHostname,
   shouldRefreshWebsiteAnalysis,
 } from "./discovery";
@@ -26,6 +29,8 @@ test("builds one deterministic search query without query explosion", () => {
     buildDiscoveryQuery({ segment: " clínica odontológica ", location: " Belém, PA ", additionalTerms: " implantes " }),
     "clínica odontológica Belém, PA implantes",
   );
+  assert.equal(DISCOVERY_MAX_CANDIDATES, 10);
+  assert.equal(DISCOVERY_CONCURRENCY, 3);
 });
 
 test("rejects social, directory and non-HTML candidates", () => {
@@ -73,4 +78,11 @@ test("only refreshes existing website intelligence after the staleness threshold
   assert.equal(shouldRefreshWebsiteAnalysis(null, now), true);
   assert.equal(shouldRefreshWebsiteAnalysis(new Date("2026-09-04T12:00:00Z"), now), false);
   assert.equal(shouldRefreshWebsiteAnalysis(new Date("2026-09-01T12:00:00Z"), now), true);
+});
+
+test("old RUNNING discovery runs are shown as potentially interrupted", () => {
+  const now = new Date("2026-09-09T12:30:00Z");
+  assert.equal(isDiscoveryRunStale({ status: "RUNNING", startedAt: new Date("2026-09-09T12:00:00Z") }, now), true);
+  assert.equal(isDiscoveryRunStale({ status: "RUNNING", startedAt: new Date("2026-09-09T12:25:00Z") }, now), false);
+  assert.equal(isDiscoveryRunStale({ status: "COMPLETED", startedAt: new Date("2026-09-09T11:00:00Z") }, now), false);
 });
