@@ -64,9 +64,8 @@ export function DiscoveryForm({ configured }: { configured: boolean }) {
         <div className="field">
           <label htmlFor="limit">Quantidade</label>
           <select id="limit" value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
+            <option value={5}>5 resultados</option>
             <option value={10}>10 resultados</option>
-            <option value={15}>15 resultados</option>
-            <option value={20}>20 resultados</option>
           </select>
         </div>
       </div>
