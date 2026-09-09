@@ -6,6 +6,13 @@ export type ProspectContactGuard = {
   existingAttemptStates?: ContactState[];
 };
 
+export type ResponseTransition = {
+  contactState: "RESPONDED";
+  prospectStage: "RESPONDED";
+  conversationStatus: "NEEDS_HUMAN";
+  opportunityStatus: "RESPONDED";
+};
+
 export class ContactWorkflowError extends Error {
   constructor(message: string) {
     super(message);
@@ -13,10 +20,14 @@ export class ContactWorkflowError extends Error {
   }
 }
 
-export function assertCanCreateFirstContact(guard: ProspectContactGuard) {
+function assertNotSuppressed(guard: Pick<ProspectContactGuard, "doNotContact" | "suppressedAt">) {
   if (guard.doNotContact || guard.suppressedAt) {
     throw new ContactWorkflowError("Contato bloqueado pela regra de supressão.");
   }
+}
+
+export function assertCanCreateFirstContact(guard: ProspectContactGuard) {
+  assertNotSuppressed(guard);
 
   const existing = guard.existingAttemptStates ?? [];
   if (existing.some((state) => state !== "FAILED")) {
@@ -25,15 +36,14 @@ export function assertCanCreateFirstContact(guard: ProspectContactGuard) {
 }
 
 export function assertCanApproveContact(state: ContactState, guard: Pick<ProspectContactGuard, "doNotContact" | "suppressedAt">) {
-  if (guard.doNotContact || guard.suppressedAt) {
-    throw new ContactWorkflowError("Contato bloqueado pela regra de supressão.");
-  }
+  assertNotSuppressed(guard);
   if (state !== "DRAFT") {
     throw new ContactWorkflowError("Somente rascunhos podem ser aprovados.");
   }
 }
 
-export function assertCanMarkSent(state: ContactState) {
+export function assertCanMarkSent(state: ContactState, guard: Pick<ProspectContactGuard, "doNotContact" | "suppressedAt">) {
+  assertNotSuppressed(guard);
   if (state !== "APPROVED") {
     throw new ContactWorkflowError("Somente mensagens aprovadas podem ser marcadas como enviadas.");
   }
@@ -45,7 +55,16 @@ export function assertCanRegisterResponse(state: ContactState) {
   }
 }
 
-export function nextContactStateOnResponse(state: ContactState): ContactState {
+export function responseTransition(state: ContactState): ResponseTransition {
   assertCanRegisterResponse(state);
-  return "RESPONDED";
+  return {
+    contactState: "RESPONDED",
+    prospectStage: "RESPONDED",
+    conversationStatus: "NEEDS_HUMAN",
+    opportunityStatus: "RESPONDED",
+  };
+}
+
+export function nextContactStateOnResponse(state: ContactState): ContactState {
+  return responseTransition(state).contactState;
 }
