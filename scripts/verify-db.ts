@@ -1,0 +1,120 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { Client } from "pg";
+
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) throw new Error("DATABASE_URL não configurada para verificação do banco.");
+
+const client = new Client({ connectionString });
+
+async function expectUniqueViolation(run: () => Promise<unknown>, label: string) {
+  try {
+    await run();
+    assert.fail(`${label}: a duplicação deveria ter sido bloqueada pelo banco.`);
+  } catch (error) {
+    if (error instanceof assert.AssertionError) throw error;
+    const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+    assert.equal(code, "23505", `${label}: esperado PostgreSQL unique_violation (23505), recebido ${code || "sem código"}.`);
+  }
+}
+
+await client.connect();
+
+try {
+  const tables = await client.query<{ table_name: string }>(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+  );
+  const tableNames = new Set(tables.rows.map((row) => row.table_name));
+  for (const table of [
+    "_prisma_migrations",
+    "account",
+    "audit_logs",
+    "companies",
+    "contact_attempts",
+    "conversations",
+    "domain_events",
+    "icps",
+    "opportunities",
+    "prospects",
+    "session",
+    "signals",
+    "user",
+    "verification",
+  ]) {
+    assert.ok(tableNames.has(table), `Tabela ausente após migrate deploy: ${table}`);
+  }
+
+  const indexes = await client.query<{ indexname: string }>(
+    "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+  );
+  const indexNames = new Set(indexes.rows.map((row) => row.indexname));
+  for (const index of [
+    "companies_dedupeKey_key",
+    "contact_attempts_idempotencyKey_key",
+    "conversations_contactAttemptId_key",
+    "domain_events_uniqueKey_key",
+  ]) {
+    assert.ok(indexNames.has(index), `Índice único crítico ausente: ${index}`);
+  }
+
+  await client.query("BEGIN");
+  try {
+    await client.query(
+      `INSERT INTO "companies" ("id", "displayName", "source", "dedupeKey", "updatedAt")
+       VALUES ('dbverify-company-1', 'DB Verify', 'MANUAL', 'dbverify:company', NOW())`,
+    );
+    await expectUniqueViolation(
+      () => client.query(
+        `INSERT INTO "companies" ("id", "displayName", "source", "dedupeKey", "updatedAt")
+         VALUES ('dbverify-company-2', 'DB Verify 2', 'MANUAL', 'dbverify:company', NOW())`,
+      ),
+      "dedupe de empresa",
+    );
+
+    await client.query(
+      `INSERT INTO "prospects" ("id", "companyId", "updatedAt")
+       VALUES ('dbverify-prospect-1', 'dbverify-company-1', NOW())`,
+    );
+    await client.query(
+      `INSERT INTO "contact_attempts" ("id", "prospectId", "channel", "messageDraft", "evidence", "idempotencyKey", "updatedAt")
+       VALUES ('dbverify-contact-1', 'dbverify-prospect-1', 'EMAIL', 'Mensagem de verificação de banco.', '{}'::jsonb, 'dbverify:contact', NOW())`,
+    );
+    await expectUniqueViolation(
+      () => client.query(
+        `INSERT INTO "contact_attempts" ("id", "prospectId", "channel", "messageDraft", "evidence", "idempotencyKey", "updatedAt")
+         VALUES ('dbverify-contact-2', 'dbverify-prospect-1', 'EMAIL', 'Outra mensagem de verificação.', '{}'::jsonb, 'dbverify:contact', NOW())`,
+      ),
+      "idempotência de abordagem",
+    );
+
+    await client.query(
+      `INSERT INTO "conversations" ("id", "prospectId", "contactAttemptId", "responsePreview", "respondedAt", "updatedAt")
+       VALUES ('dbverify-conversation-1', 'dbverify-prospect-1', 'dbverify-contact-1', 'Resposta', NOW(), NOW())`,
+    );
+    await expectUniqueViolation(
+      () => client.query(
+        `INSERT INTO "conversations" ("id", "prospectId", "contactAttemptId", "responsePreview", "respondedAt", "updatedAt")
+         VALUES ('dbverify-conversation-2', 'dbverify-prospect-1', 'dbverify-contact-1', 'Resposta duplicada', NOW(), NOW())`,
+      ),
+      "conversa por primeira abordagem",
+    );
+
+    await client.query(
+      `INSERT INTO "domain_events" ("id", "type", "aggregateType", "aggregateId", "payload", "uniqueKey")
+       VALUES ('dbverify-event-1', 'dbverify.event', 'contact_attempt', 'dbverify-contact-1', '{}'::jsonb, 'dbverify:event')`,
+    );
+    await expectUniqueViolation(
+      () => client.query(
+        `INSERT INTO "domain_events" ("id", "type", "aggregateType", "aggregateId", "payload", "uniqueKey")
+         VALUES ('dbverify-event-2', 'dbverify.event', 'contact_attempt', 'dbverify-contact-1', '{}'::jsonb, 'dbverify:event')`,
+      ),
+      "idempotência de evento",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+  }
+
+  console.log("Database verification passed: migrations, tables and critical uniqueness constraints are operational.");
+} finally {
+  await client.end();
+}
