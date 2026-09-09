@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { ACTIVE_OPPORTUNITY_WHERE } from "@/domain/opportunity-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { WebsiteAnalyzeButton } from "@/components/website-analyze-button";
 
@@ -92,7 +93,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
     include: {
       prospect: true,
       signals: { orderBy: { lastObservedAt: "desc" } },
-      opportunities: { include: { signal: true }, orderBy: { score: "desc" } },
+      opportunities: { where: ACTIVE_OPPORTUNITY_WHERE, orderBy: { score: "desc" } },
     },
   });
   if (!company) notFound();
@@ -103,7 +104,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   const contacts = asRecord(facts?.contacts);
   const forms = asRecord(facts?.forms);
   const technologies = asArray(facts?.technologies).map(asRecord).filter((item): item is Record<string, unknown> => item !== null);
-  const currentOpportunities = company.opportunities.filter((opportunity) => !opportunity.signal?.resolvedAt);
+  const currentOpportunities = company.opportunities;
 
   return (
     <div className="page">
