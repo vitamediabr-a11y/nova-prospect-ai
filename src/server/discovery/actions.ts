@@ -58,6 +58,26 @@ export async function startDiscovery(input: DiscoveryInput): Promise<DiscoveryAc
   }
 
   const now = new Date();
+  const query = buildDiscoveryQuery({
+    segment: parsed.data.segment,
+    location: parsed.data.location,
+    additionalTerms: parsed.data.additionalTerms,
+  });
+  const key = idempotencyKey({ userId: session.user.id, query, limit: parsed.data.limit, now });
+
+  let run = await prisma.discoveryRun.findUnique({ where: { idempotencyKey: key } });
+  if (run) {
+    if (run.status === "FAILED") {
+      return {
+        ok: false,
+        runId: run.id,
+        code: run.errorCode ?? "DISCOVERY_FAILED",
+        message: run.errorMessage ?? "Esta busca falhou.",
+      };
+    }
+    return { ok: true, runId: run.id, message: "Esta busca já foi iniciada. Abrindo o resultado existente." };
+  }
+
   const recentRuns = await prisma.discoveryRun.count({
     where: {
       createdById: session.user.id,
@@ -70,18 +90,6 @@ export async function startDiscovery(input: DiscoveryInput): Promise<DiscoveryAc
       code: "DISCOVERY_RATE_LIMITED",
       message: "Limite de buscas atingido. Tente novamente mais tarde.",
     };
-  }
-
-  const query = buildDiscoveryQuery({
-    segment: parsed.data.segment,
-    location: parsed.data.location,
-    additionalTerms: parsed.data.additionalTerms,
-  });
-  const key = idempotencyKey({ userId: session.user.id, query, limit: parsed.data.limit, now });
-
-  let run = await prisma.discoveryRun.findUnique({ where: { idempotencyKey: key } });
-  if (run) {
-    return { ok: true, runId: run.id, message: "Esta busca já foi iniciada. Abrindo o resultado existente." };
   }
 
   run = await prisma.discoveryRun.create({
