@@ -86,6 +86,10 @@ const UNSUPPORTED_INFERENCE_PHRASES = [
   "anúncios ativos",
   "campanhas ativas",
   "grande volume de leads",
+  "muitos leads",
+  "alto faturamento",
+  "baixo faturamento",
+  "equipe sobrecarregada",
 ];
 
 const KNOWN_TECHNOLOGIES = [
@@ -288,25 +292,50 @@ export function validateGroundedCommercialOutput(pack: CommercialEvidencePack, r
     return { ok: false, code: "AI_INVALID_OUTPUT", reason: "DUPLICATE_EVIDENCE_REFERENCE" };
   }
 
+  const selectedOpportunityRef = `opportunity:${output.strongestOpportunity.opportunityId}`;
+  if (!output.evidenceReferences.includes(selectedOpportunityRef)) {
+    return { ok: false, code: "AI_INVALID_OUTPUT", reason: "MISSING_OPPORTUNITY_REFERENCE" };
+  }
+  if (!output.evidenceReferences.some((ref) => ref.startsWith("signal:") || ref.startsWith("website.") || ref.startsWith("technology:"))) {
+    return { ok: false, code: "AI_INSUFFICIENT_EVIDENCE", reason: "NO_FACTUAL_REFERENCE" };
+  }
+
   const message = output.messageDraft;
+  const allProse = [
+    output.summary,
+    output.commercialInterpretation,
+    output.strongestOpportunity.rationale,
+    output.messageDraft,
+    ...output.warnings,
+  ].join(" ");
   const lower = message.toLocaleLowerCase("pt-BR");
-  if (/https?:\/\/|www\./i.test(message)) return { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_URL" };
-  if (/\{\{|\}\}|\[[^\]]*(nome|empresa|site|contato)[^\]]*\]|<[^>]+>|NOME_DA_EMPRESA|SEU_NOME|\bTODO\b/i.test(message)) {
+  const allLower = allProse.toLocaleLowerCase("pt-BR");
+
+  if (/https?:\/\/|www\./i.test(allProse)) return { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_URL" };
+  if (/\{\{|\}\}|\[[^\]]*(nome|empresa|site|contato)[^\]]*\]|<[^>]+>|NOME_DA_EMPRESA|SEU_NOME|\bTODO\b/i.test(allProse)) {
     return { ok: false, code: "AI_INVALID_OUTPUT", reason: "PLACEHOLDER" };
   }
   if (SLOP_PHRASES.some((phrase) => lower.includes(phrase))) return { ok: false, code: "AI_INVALID_OUTPUT", reason: "GENERIC_SLOP" };
-  if (UNSUPPORTED_INFERENCE_PHRASES.some((phrase) => lower.includes(phrase))) {
+  if (UNSUPPORTED_INFERENCE_PHRASES.some((phrase) => allLower.includes(phrase))) {
     return { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_INFERENCE" };
   }
 
   const detectedTechnologies = new Set(pack.website.technologies.map((item) => item.toLocaleLowerCase("pt-BR")));
   for (const technology of KNOWN_TECHNOLOGIES) {
-    if (lower.includes(technology.toLocaleLowerCase("pt-BR")) && !detectedTechnologies.has(technology.toLocaleLowerCase("pt-BR"))) {
+    if (allLower.includes(technology.toLocaleLowerCase("pt-BR")) && !detectedTechnologies.has(technology.toLocaleLowerCase("pt-BR"))) {
       return { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_TECHNOLOGY" };
     }
   }
 
-  if (output.evidenceReferences.length === 0) return { ok: false, code: "AI_INSUFFICIENT_EVIDENCE", reason: "NO_REFERENCES" };
+  const referencedFacts = pack.evidenceCatalog
+    .filter((item) => output.evidenceReferences.includes(item.ref))
+    .map((item) => item.fact)
+    .join(" ");
+  const numericClaims = allProse.match(/(?:R\$\s*)?\d+(?:[.,]\d+)?%/g) ?? [];
+  if (numericClaims.some((claim) => !referencedFacts.includes(claim))) {
+    return { ok: false, code: "AI_INVALID_OUTPUT", reason: "UNSUPPORTED_MEASUREMENT" };
+  }
+
   return { ok: true, output };
 }
 
