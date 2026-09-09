@@ -95,7 +95,7 @@ export async function createCompany(input: CreateCompanyInput): Promise<CreateCo
 
     return { ok: true, id: company.id };
   } catch (error) {
-    console.error("company.create failed", { error, dedupeKey });
+    console.error("company.create failed", { errorName: error instanceof Error ? error.name : "UnknownError" });
     return { ok: false, message: "Não foi possível cadastrar a empresa. Tente novamente." };
   }
 }
