@@ -23,7 +23,7 @@ CREATE TABLE "commercial_analyses" (
 CREATE INDEX "commercial_analyses_companyId_createdAt_idx"
 ON "commercial_analyses"("companyId", "createdAt");
 
-CREATE INDEX "commercial_analyses_companyId_opportunityId_inputFingerprint_status_createdAt_idx"
+CREATE INDEX "commercial_analyses_companyId_opportunityId_inputFingerprin_idx"
 ON "commercial_analyses"("companyId", "opportunityId", "inputFingerprint", "status", "createdAt");
 
 CREATE INDEX "commercial_analyses_createdById_createdAt_idx"
