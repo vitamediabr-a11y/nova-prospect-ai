@@ -35,6 +35,12 @@ type CompanyWebsiteContext = {
   prospect: { ownerId: string | null; lastContactAt: Date | null } | null;
 };
 
+type ManagedSignalState = {
+  id: string;
+  type: string;
+  resolvedAt: Date | null;
+};
+
 function toJsonArray(value: unknown[]): Prisma.InputJsonArray {
   return value.map((item) => toJsonNested(item));
 }
@@ -66,6 +72,57 @@ function wasRecentlyContacted(lastContactAt: Date | null, now: Date) {
   return now.getTime() - lastContactAt.getTime() < 30 * 24 * 60 * 60 * 1000;
 }
 
+async function resolveSignalsAndLinkedOpportunities(
+  tx: Prisma.TransactionClient,
+  input: { companyId: string; signals: ManagedSignalState[]; resolvedAt: Date },
+) {
+  const activeSignals = input.signals.filter((signal) => signal.resolvedAt === null);
+  if (activeSignals.length === 0) return;
+
+  const signalIds = activeSignals.map((signal) => signal.id);
+  await tx.signal.updateMany({
+    where: { id: { in: signalIds }, resolvedAt: null },
+    data: { resolvedAt: input.resolvedAt },
+  });
+
+  const activeOpportunities = await tx.opportunity.findMany({
+    where: {
+      signalId: { in: signalIds },
+      dedupeKey: { startsWith: `website:${input.companyId}:` },
+      resolvedAt: null,
+    },
+    select: { id: true, signalId: true },
+  });
+
+  if (activeOpportunities.length > 0) {
+    await tx.opportunity.updateMany({
+      where: { id: { in: activeOpportunities.map((opportunity) => opportunity.id) }, resolvedAt: null },
+      data: { resolvedAt: input.resolvedAt },
+    });
+  }
+
+  const transitionKey = input.resolvedAt.toISOString();
+  await tx.domainEvent.createMany({
+    data: [
+      ...activeSignals.map((signal) => ({
+        type: "signal.resolved",
+        aggregateType: "signal",
+        aggregateId: signal.id,
+        payload: { companyId: input.companyId, signalType: signal.type },
+        uniqueKey: `signal.resolved:${signal.id}:${transitionKey}`,
+      })),
+      ...activeOpportunities.map((opportunity) => ({
+        type: "opportunity.resolved",
+        aggregateType: "opportunity",
+        aggregateId: opportunity.id,
+        payload: { companyId: input.companyId, signalId: opportunity.signalId },
+        uniqueKey: `opportunity.resolved:${opportunity.id}:${transitionKey}`,
+      })),
+    ],
+    skipDuplicates: true,
+  });
+}
+
 async function persistWebsiteResult(input: {
   company: CompanyWebsiteContext;
   actorId: string;
@@ -92,31 +149,16 @@ async function persistWebsiteResult(input: {
       currentTypes,
     );
 
-    if (reconciliation.resolved.length > 0) {
-      await tx.signal.updateMany({
-        where: {
-          companyId: company.id,
-          source: "WEBSITE_ANALYZER",
-          type: { in: reconciliation.resolved },
-          resolvedAt: null,
-        },
-        data: { resolvedAt: analyzedAt },
-      });
-
-      const resolvedEvents = existingSignals
-        .filter((signal) => reconciliation.resolved.includes(signal.type) && signal.resolvedAt === null)
-        .map((signal) => ({
-          type: "signal.resolved",
-          aggregateType: "signal",
-          aggregateId: signal.id,
-          payload: { companyId: company.id, signalType: signal.type },
-          uniqueKey: `signal.resolved:${signal.id}`,
-        }));
-      if (resolvedEvents.length > 0) await tx.domainEvent.createMany({ data: resolvedEvents, skipDuplicates: true });
-    }
+    const signalsToResolve = existingSignals.filter((signal) => reconciliation.resolved.includes(signal.type));
+    await resolveSignalsAndLinkedOpportunities(tx, {
+      companyId: company.id,
+      signals: signalsToResolve,
+      resolvedAt: analyzedAt,
+    });
 
     for (const candidate of candidates) {
       const dedupeKey = websiteSignalKey(company.id, candidate.type);
+      const previousSignal = existingSignals.find((signal) => signal.type === candidate.type) ?? null;
       const signal = await tx.signal.upsert({
         where: { dedupeKey },
         create: {
@@ -137,16 +179,23 @@ async function persistWebsiteResult(input: {
         },
       });
 
-      await tx.domainEvent.createMany({
-        data: [{
-          type: "signal.detected",
+      const signalEvents = [{
+        type: "signal.detected",
+        aggregateType: "signal",
+        aggregateId: signal.id,
+        payload: { companyId: company.id, signalType: signal.type, source: "WEBSITE_ANALYZER" },
+        uniqueKey: `signal.detected:${signal.id}`,
+      }];
+      if (previousSignal?.resolvedAt) {
+        signalEvents.push({
+          type: "signal.reactivated",
           aggregateType: "signal",
           aggregateId: signal.id,
           payload: { companyId: company.id, signalType: signal.type, source: "WEBSITE_ANALYZER" },
-          uniqueKey: `signal.detected:${signal.id}`,
-        }],
-        skipDuplicates: true,
-      });
+          uniqueKey: `signal.reactivated:${signal.id}:${previousSignal.resolvedAt.toISOString()}`,
+        });
+      }
+      await tx.domainEvent.createMany({ data: signalEvents, skipDuplicates: true });
 
       const suggestion = detectOpportunity(signal);
       if (!suggestion) continue;
@@ -163,6 +212,10 @@ async function persistWebsiteResult(input: {
         recentlyContacted: wasRecentlyContacted(company.prospect?.lastContactAt ?? null, analyzedAt),
       });
       const opportunityDedupeKey = websiteOpportunityKey(company.id, signal.type);
+      const previousOpportunity = await tx.opportunity.findUnique({
+        where: { dedupeKey: opportunityDedupeKey },
+        select: { id: true, resolvedAt: true },
+      });
       const opportunity = await tx.opportunity.upsert({
         where: { dedupeKey: opportunityDedupeKey },
         create: {
@@ -177,6 +230,7 @@ async function persistWebsiteResult(input: {
           score: score.total,
           scoreBreakdown: toJsonObject({ components: score.components, explanation: score.explanation, eligible: score.eligible }),
           priority: priorityFromScore(score.total),
+          resolvedAt: null,
         },
         update: {
           signalId: signal.id,
@@ -188,19 +242,27 @@ async function persistWebsiteResult(input: {
           score: score.total,
           scoreBreakdown: toJsonObject({ components: score.components, explanation: score.explanation, eligible: score.eligible }),
           priority: priorityFromScore(score.total),
+          resolvedAt: null,
         },
       });
 
-      await tx.domainEvent.createMany({
-        data: [{
-          type: "opportunity.created",
+      const opportunityEvents = [{
+        type: "opportunity.created",
+        aggregateType: "opportunity",
+        aggregateId: opportunity.id,
+        payload: { companyId: company.id, signalId: signal.id, source: "WEBSITE_ANALYZER" },
+        uniqueKey: `opportunity.created:${opportunity.id}`,
+      }];
+      if (previousOpportunity?.resolvedAt) {
+        opportunityEvents.push({
+          type: "opportunity.reactivated",
           aggregateType: "opportunity",
           aggregateId: opportunity.id,
           payload: { companyId: company.id, signalId: signal.id, source: "WEBSITE_ANALYZER" },
-          uniqueKey: `opportunity.created:${opportunity.id}`,
-        }],
-        skipDuplicates: true,
-      });
+          uniqueKey: `opportunity.reactivated:${opportunity.id}:${previousOpportunity.resolvedAt.toISOString()}`,
+        });
+      }
+      await tx.domainEvent.createMany({ data: opportunityEvents, skipDuplicates: true });
     }
 
     await tx.company.update({
@@ -255,10 +317,17 @@ async function persistAnalysisFailure(input: {
     });
 
     if (company.website) {
-      await tx.signal.updateMany({
-        where: { dedupeKey: websiteSignalKey(company.id, "NO_WEBSITE"), resolvedAt: null },
-        data: { resolvedAt: analyzedAt },
+      const noWebsite = await tx.signal.findUnique({
+        where: { dedupeKey: websiteSignalKey(company.id, "NO_WEBSITE") },
+        select: { id: true, type: true, resolvedAt: true },
       });
+      if (noWebsite) {
+        await resolveSignalsAndLinkedOpportunities(tx, {
+          companyId: company.id,
+          signals: [noWebsite],
+          resolvedAt: analyzedAt,
+        });
+      }
     }
 
     await tx.auditLog.create({
@@ -306,6 +375,7 @@ export async function analyzeCompanyWebsite(input: AnalyzeCompanyWebsiteInput): 
       }),
     });
     revalidatePath(`/empresas/${company.id}`);
+    revalidatePath("/painel");
     return { ok: true, status: "NO_WEBSITE", message: "Site não cadastrado. O sinal factual foi registrado." };
   }
 
@@ -325,6 +395,7 @@ export async function analyzeCompanyWebsite(input: AnalyzeCompanyWebsiteInput): 
         facts,
       });
       revalidatePath(`/empresas/${company.id}`);
+      revalidatePath("/painel");
       return { ok: false, status: "NOT_ANALYZABLE", message };
     }
 
@@ -367,6 +438,7 @@ export async function analyzeCompanyWebsite(input: AnalyzeCompanyWebsiteInput): 
       message: result.message,
     });
     revalidatePath(`/empresas/${company.id}`);
+    revalidatePath("/painel");
     return result;
   }
 }
