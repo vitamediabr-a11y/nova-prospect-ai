@@ -273,7 +273,6 @@ export function analyzeWebsiteHtml(input: {
 export function deriveWebsiteSignals(facts: WebsiteAnalysisFacts): WebsiteSignalCandidate[] {
   const signals: WebsiteSignalCandidate[] = [];
   const evidenceBase = { scope: "homepage", finalUrl: facts.finalUrl };
-  const technologyNames = facts.technologies.map((item) => item.technology);
 
   if (!facts.viewportMeta) signals.push({ type: "MISSING_VIEWPORT_META", confidence: 1, evidence: { ...evidenceBase, viewportMeta: false } });
   if (facts.forms.count === 0) signals.push({ type: "NO_HOMEPAGE_FORM", confidence: 1, evidence: { ...evidenceBase, formCount: 0 } });

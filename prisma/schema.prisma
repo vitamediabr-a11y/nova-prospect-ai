@@ -11,6 +11,7 @@ enum CompanySource {
   MANUAL
   CSV
   WEBSITE
+  WEB_SEARCH
   GOOGLE_MAPS
   GOOGLE_SEARCH
   DIRECTORY
@@ -82,6 +83,14 @@ enum DomainEventStatus {
   FAILED
 }
 
+enum DiscoveryRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
 model User {
   id            String   @id
   name          String
@@ -97,6 +106,7 @@ model User {
   ownedProspects     Prospect[]       @relation("ProspectOwner")
   ownedOpportunities Opportunity[]    @relation("OpportunityOwner")
   approvedContacts   ContactAttempt[] @relation("ContactApprover")
+  discoveryRuns      DiscoveryRun[]
   auditLogs          AuditLog[]
 
   @@map("user")
@@ -169,28 +179,29 @@ model Icp {
 }
 
 model Company {
-  id                 String        @id @default(cuid())
-  displayName        String
-  legalName          String?
-  website            String?
-  instagram          String?
-  whatsapp           String?
-  email              String?
-  location           String?
-  industry           String?
-  employeeEstimate   Int?
-  source             CompanySource
-  sourceRef          String?
-  dedupeKey          String        @unique
-  socialSignals      Json?
-  technologySignals  Json?
-  websiteAnalysis    Json?
-  websiteAnalyzedAt  DateTime?
-  doNotContact       Boolean       @default(false)
-  processingPurpose  String        @default("prospeccao_b2b")
-  retentionUntil     DateTime?
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  id                     String        @id @default(cuid())
+  displayName            String
+  displayNameProvisional Boolean       @default(false)
+  legalName              String?
+  website                String?
+  instagram              String?
+  whatsapp               String?
+  email                  String?
+  location               String?
+  industry               String?
+  employeeEstimate       Int?
+  source                 CompanySource
+  sourceRef              String?
+  dedupeKey              String        @unique
+  socialSignals          Json?
+  technologySignals      Json?
+  websiteAnalysis        Json?
+  websiteAnalyzedAt      DateTime?
+  doNotContact           Boolean       @default(false)
+  processingPurpose      String        @default("prospeccao_b2b")
+  retentionUntil         DateTime?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
 
   prospect      Prospect?
   signals       Signal[]
@@ -288,7 +299,7 @@ model ContactAttempt {
   approvedById   String?
   idempotencyKey String               @unique
   sentAt         DateTime?
-  deliveredAt    DateTime?
+  deliveredAt   DateTime?
   respondedAt    DateTime?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
@@ -338,6 +349,38 @@ model DomainEvent {
   @@index([status, occurredAt])
   @@index([aggregateType, aggregateId])
   @@map("domain_events")
+}
+
+model DiscoveryRun {
+  id                 String             @id @default(cuid())
+  provider           String
+  segment            String
+  location           String
+  additionalTerms    String?
+  query              String
+  status             DiscoveryRunStatus @default(PENDING)
+  requestedLimit     Int
+  providerRequests   Int                @default(0)
+  candidatesFound    Int                @default(0)
+  candidatesAccepted Int                @default(0)
+  newCompanies       Int                @default(0)
+  duplicatesSkipped  Int                @default(0)
+  rejectedCandidates Int                @default(0)
+  failedCandidates   Int                @default(0)
+  securityBlocked    Int                @default(0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdById        String
+  idempotencyKey     String             @unique
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime           @default(now())
+
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([createdById, createdAt])
+  @@index([status, createdAt])
+  @@map("discovery_runs")
 }
 
 model AuditLog {
