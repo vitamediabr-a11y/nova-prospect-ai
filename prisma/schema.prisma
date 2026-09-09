@@ -1,0 +1,349 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum CompanySource {
+  MANUAL
+  CSV
+  WEBSITE
+  GOOGLE_MAPS
+  GOOGLE_SEARCH
+  DIRECTORY
+  INSTAGRAM
+  WHATSAPP
+  EMAIL
+  OTHER
+}
+
+enum ProspectStage {
+  DISCOVERED
+  QUALIFYING
+  QUALIFIED
+  READY_FOR_CONTACT
+  CONTACTED
+  RESPONDED
+  IN_CONVERSATION
+  MEETING
+  PROPOSAL
+  WON
+  LOST
+}
+
+enum OpportunityPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum OpportunityStatus {
+  OPEN
+  REVIEW
+  READY
+  CONTACTED
+  RESPONDED
+  WON
+  LOST
+  DISMISSED
+}
+
+enum ContactChannel {
+  INSTAGRAM
+  WHATSAPP
+  EMAIL
+  PHONE
+  OTHER
+}
+
+enum ContactAttemptStatus {
+  DRAFT
+  APPROVED
+  SENT
+  DELIVERED
+  FAILED
+  RESPONDED
+}
+
+enum ConversationStatus {
+  NEEDS_HUMAN
+  IN_PROGRESS
+  WAITING_PROSPECT
+  CLOSED
+}
+
+enum DomainEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  role          String   @default("VIEWER")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions           Session[]
+  accounts           Account[]
+  ownedProspects     Prospect[]     @relation("ProspectOwner")
+  ownedOpportunities Opportunity[]  @relation("OpportunityOwner")
+  approvedContacts   ContactAttempt[] @relation("ContactApprover")
+  auditLogs          AuditLog[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Icp {
+  id                 String   @id @default(cuid())
+  name               String
+  description        String?
+  industries         Json?
+  locations          Json?
+  followerRanges     Json?
+  businessSignals    Json?
+  requiredConditions Json?
+  excludedConditions Json?
+  preferredSolutions Json?
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([active])
+  @@map("icps")
+}
+
+model Company {
+  id                String        @id @default(cuid())
+  displayName       String
+  legalName         String?
+  website           String?
+  instagram         String?
+  whatsapp          String?
+  email             String?
+  location          String?
+  industry          String?
+  employeeEstimate  Int?
+  source            CompanySource
+  sourceRef         String?
+  dedupeKey         String        @unique
+  socialSignals     Json?
+  technologySignals Json?
+  doNotContact      Boolean       @default(false)
+  processingPurpose String        @default("prospeccao_b2b")
+  retentionUntil    DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  prospect      Prospect?
+  signals       Signal[]
+  opportunities Opportunity[]
+
+  @@index([source])
+  @@index([industry])
+  @@index([doNotContact])
+  @@map("companies")
+}
+
+model Prospect {
+  id                String        @id @default(cuid())
+  companyId         String        @unique
+  stage             ProspectStage @default(DISCOVERED)
+  ownerId           String?
+  suppressedAt      DateTime?
+  suppressionReason String?
+  lastContactAt     DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner           User?            @relation("ProspectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contactAttempts ContactAttempt[]
+  conversations   Conversation[]
+
+  @@index([stage])
+  @@index([ownerId])
+  @@index([suppressedAt])
+  @@map("prospects")
+}
+
+model Signal {
+  id         String   @id @default(cuid())
+  companyId  String
+  type       String
+  source     String
+  confidence Float
+  evidence   Json
+  dedupeKey  String   @unique
+  detectedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  opportunities Opportunity[]
+
+  @@index([companyId, detectedAt])
+  @@index([type])
+  @@map("signals")
+}
+
+model Opportunity {
+  id                  String              @id @default(cuid())
+  companyId           String
+  signalId            String?
+  ownerId             String?
+  problem             String
+  evidence            Json
+  businessImpact      String
+  recommendedSolution String
+  score               Int
+  scoreBreakdown      Json
+  priority            OpportunityPriority
+  status              OpportunityStatus   @default(OPEN)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  signal          Signal?          @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  owner           User?            @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contactAttempts ContactAttempt[]
+
+  @@index([companyId, status])
+  @@index([score])
+  @@index([ownerId])
+  @@map("opportunities")
+}
+
+model ContactAttempt {
+  id             String               @id @default(cuid())
+  prospectId     String
+  opportunityId  String?
+  channel        ContactChannel
+  messageDraft   String
+  messageFinal   String?
+  evidence       Json
+  status         ContactAttemptStatus @default(DRAFT)
+  approvedById   String?
+  idempotencyKey String               @unique
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  respondedAt    DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  prospect    Prospect      @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  opportunity Opportunity?   @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  approvedBy  User?          @relation("ContactApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  conversation Conversation?
+
+  @@index([prospectId, status])
+  @@index([opportunityId])
+  @@map("contact_attempts")
+}
+
+model Conversation {
+  id               String             @id @default(cuid())
+  prospectId       String
+  contactAttemptId String             @unique
+  status           ConversationStatus @default(NEEDS_HUMAN)
+  responsePreview  String?
+  respondedAt      DateTime
+  humanTakenOverAt DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  prospect       Prospect       @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  contactAttempt ContactAttempt @relation(fields: [contactAttemptId], references: [id], onDelete: Cascade)
+
+  @@index([status, respondedAt])
+  @@index([prospectId])
+  @@map("conversations")
+}
+
+model DomainEvent {
+  id            String            @id @default(cuid())
+  type          String
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  uniqueKey     String            @unique
+  status        DomainEventStatus @default(PENDING)
+  attempts      Int               @default(0)
+  occurredAt    DateTime          @default(now())
+  processedAt   DateTime?
+  lastError     String?
+
+  @@index([status, occurredAt])
+  @@index([aggregateType, aggregateId])
+  @@map("domain_events")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
