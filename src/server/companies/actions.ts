@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/access";
-import { createCompanySchema, type CreateCompanyInput } from "./schema";
+import { createCompanySchema, type CreateCompanyData, type CreateCompanyInput } from "./schema";
 
 export type CreateCompanyResult =
   | { ok: true; id: string }
@@ -25,7 +25,7 @@ function normalizePhone(value: string) {
   return digits || null;
 }
 
-function companyDedupeKey(input: CreateCompanyInput) {
+function companyDedupeKey(input: CreateCompanyData) {
   if (input.website) {
     const host = new URL(input.website).hostname.replace(/^www\./, "").toLowerCase();
     return `web:${host}`;
