@@ -37,13 +37,13 @@ export default async function InboxPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Inbox</p>
-          <h1>Respostas aguardando atendimento</h1>
-          <p className="subtle">A fila mostra somente conversas reais registradas como resposta à primeira abordagem.</p>
+          <h1>Respostas registradas aguardando atendimento humano</h1>
+          <p className="subtle">A fila reúne respostas registradas no sistema. O recebimento automático depende de uma integração de entrada configurada.</p>
         </div>
       </header>
 
       {conversations.length === 0 ? (
-        <div className="empty">Nenhuma resposta aguardando atendimento humano.</div>
+        <div className="empty">Nenhuma resposta registrada aguardando atendimento humano.</div>
       ) : (
         <div className="data-list">
           {conversations.map((conversation) => {
