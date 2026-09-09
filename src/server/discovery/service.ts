@@ -8,6 +8,7 @@ import {
 } from "@/domain/discovery";
 import { WebsiteSecurityError } from "@/domain/ssrf";
 import { analyzeWebsiteHtml } from "@/domain/website-analysis";
+import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { safeFetchHtml, WebsiteFetchError } from "@/server/website/safe-fetch";
 import type { DiscoveryProvider } from "./providers/types";
@@ -88,12 +89,29 @@ export async function verifyCandidateWebsite(url: string): Promise<VerifiedBusin
   }
 }
 
+function companyIdentityConditions(identity: FirstPartyBusinessIdentity): Prisma.CompanyWhereInput[] {
+  const conditions: Prisma.CompanyWhereInput[] = [
+    { dedupeKey: companyDedupeKeyFromWebsite(identity.website) },
+  ];
+  if (identity.whatsapp) conditions.push({ whatsapp: identity.whatsapp });
+  if (identity.email) conditions.push({ email: { equals: identity.email, mode: "insensitive" } });
+  if (!identity.provisional && identity.location) {
+    conditions.push({
+      AND: [
+        { displayName: { equals: identity.displayName, mode: "insensitive" } },
+        { location: { equals: identity.location, mode: "insensitive" } },
+      ],
+    });
+  }
+  return conditions;
+}
+
 export function createPrismaDiscoveryRepository(): DiscoveryRepository {
   return {
     async acceptVerified({ identity, actorId, discoveryRunId }) {
       const dedupeKey = companyDedupeKeyFromWebsite(identity.website);
-      const existing = await prisma.company.findUnique({
-        where: { dedupeKey },
+      const existing = await prisma.company.findFirst({
+        where: { OR: companyIdentityConditions(identity) },
         select: { id: true, websiteAnalyzedAt: true },
       });
       if (existing) return { companyId: existing.id, isNew: false, websiteAnalyzedAt: existing.websiteAnalyzedAt };
@@ -230,6 +248,11 @@ export async function executeDiscoveryPipeline(input: {
       continue;
     }
 
+    const verifiedDecision = evaluateDiscoveryCandidate(verified.identity.website);
+    if (!verifiedDecision.accepted) {
+      result.rejectedCandidates += 1;
+      continue;
+    }
     const finalHost = normalizeBusinessHostname(verified.identity.website);
     if (seenVerifiedHosts.has(finalHost)) {
       result.duplicatesSkipped += 1;
