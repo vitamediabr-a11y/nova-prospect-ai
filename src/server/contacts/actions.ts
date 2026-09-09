@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/access";
 import {
@@ -232,4 +233,52 @@ export async function registerProspectResponse(input: RegisterResponseInput): Pr
   } catch (error) {
     return mapError(error, "Não foi possível registrar a resposta do prospect.");
   }
+}
+
+export async function takeOverConversation(formData: FormData): Promise<void> {
+  const { session } = await requireRole(["OWNER", "ADMIN", "MANAGER", "SALES"]);
+  const conversationId = String(formData.get("conversationId") ?? "").trim();
+  if (!conversationId) return;
+
+  await prisma.$transaction(async (tx) => {
+    const conversation = await tx.conversation.findUnique({
+      where: { id: conversationId },
+      select: { id: true, prospectId: true, status: true, humanTakenOverAt: true },
+    });
+    if (!conversation) throw new ContactWorkflowError("Conversa não encontrada.");
+    if (conversation.status === "IN_PROGRESS" && conversation.humanTakenOverAt) return;
+    if (conversation.status !== "NEEDS_HUMAN") {
+      throw new ContactWorkflowError("Esta conversa não está aguardando atendimento humano.");
+    }
+
+    const takenOverAt = new Date();
+    await tx.conversation.update({
+      where: { id: conversation.id },
+      data: { status: "IN_PROGRESS", humanTakenOverAt: takenOverAt },
+    });
+    await tx.prospect.update({
+      where: { id: conversation.prospectId },
+      data: { stage: "IN_CONVERSATION" },
+    });
+    await tx.domainEvent.create({
+      data: {
+        type: "human_handoff.accepted",
+        aggregateType: "conversation",
+        aggregateId: conversation.id,
+        payload: { prospectId: conversation.prospectId, userId: session.user.id },
+        uniqueKey: `human_handoff.accepted:${conversation.id}`,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: session.user.id,
+        action: "conversation.take_over",
+        entityType: "conversation",
+        entityId: conversation.id,
+        metadata: { prospectId: conversation.prospectId },
+      },
+    });
+  });
+
+  revalidatePath("/inbox");
 }
