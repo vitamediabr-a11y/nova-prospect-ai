@@ -9,6 +9,20 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci
       BETTER_AUTH_SECRET: ci-only-secret-at-least-32-characters-long
@@ -21,6 +35,10 @@ jobs:
           cache: npm
           cache-dependency-path: package.json
       - run: npm install --no-audit --no-fund
+      - run: npm run db:deploy
+      - run: npm run db:verify
+      - run: npx prisma migrate diff --from-config-datasource --to-schema=prisma/schema.prisma --exit-code
+      - run: npm run db:generate
       - run: npm run test
       - run: npm run lint
       - run: npm run typecheck

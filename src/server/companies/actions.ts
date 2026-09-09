@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/access";
-import { createCompanySchema, type CreateCompanyInput } from "./schema";
+import { createCompanySchema, type CreateCompanyData, type CreateCompanyInput } from "./schema";
 
 export type CreateCompanyResult =
   | { ok: true; id: string }
@@ -25,7 +25,7 @@ function normalizePhone(value: string) {
   return digits || null;
 }
 
-function companyDedupeKey(input: CreateCompanyInput) {
+function companyDedupeKey(input: CreateCompanyData) {
   if (input.website) {
     const host = new URL(input.website).hostname.replace(/^www\./, "").toLowerCase();
     return `web:${host}`;
@@ -95,7 +95,7 @@ export async function createCompany(input: CreateCompanyInput): Promise<CreateCo
 
     return { ok: true, id: company.id };
   } catch (error) {
-    console.error("company.create failed", { error, dedupeKey });
+    console.error("company.create failed", { errorName: error instanceof Error ? error.name : "UnknownError" });
     return { ok: false, message: "Não foi possível cadastrar a empresa. Tente novamente." };
   }
 }

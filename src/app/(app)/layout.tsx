@@ -11,6 +11,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <div className="brand">Nova Prospect<small>Nova Web Studios</small></div>
         <nav className="nav" aria-label="Navegação principal">
           <Link href="/painel">Painel</Link>
+          <Link href="/inbox">Inbox</Link>
           <Link href="/empresas">Empresas</Link>
           <Link href="/empresas/nova">Cadastrar</Link>
         </nav>

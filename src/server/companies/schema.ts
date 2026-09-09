@@ -13,4 +13,5 @@ export const createCompanySchema = z.object({
   industry: z.string().trim().max(120).default(""),
 });
 
-export type CreateCompanyInput = z.infer<typeof createCompanySchema>;
+export type CreateCompanyInput = z.input<typeof createCompanySchema>;
+export type CreateCompanyData = z.output<typeof createCompanySchema>;
