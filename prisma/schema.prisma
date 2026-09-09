@@ -92,22 +92,23 @@ enum DiscoveryRunStatus {
 }
 
 model User {
-  id            String   @id
-  name          String
-  email         String   @unique
-  emailVerified Boolean  @default(false)
-  image         String?
-  role          String   @default("VIEWER")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 String   @id
+  name               String
+  email              String   @unique
+  emailVerified      Boolean  @default(false)
+  image              String?
+  role               String   @default("VIEWER")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  sessions           Session[]
-  accounts           Account[]
-  ownedProspects     Prospect[]       @relation("ProspectOwner")
-  ownedOpportunities Opportunity[]    @relation("OpportunityOwner")
-  approvedContacts   ContactAttempt[] @relation("ContactApprover")
-  discoveryRuns      DiscoveryRun[]
-  auditLogs          AuditLog[]
+  sessions            Session[]
+  accounts            Account[]
+  ownedProspects      Prospect[]           @relation("ProspectOwner")
+  ownedOpportunities  Opportunity[]        @relation("OpportunityOwner")
+  approvedContacts    ContactAttempt[]     @relation("ContactApprover")
+  discoveryRuns       DiscoveryRun[]
+  commercialAnalyses  CommercialAnalysis[] @relation("CommercialAnalysisCreator")
+  auditLogs           AuditLog[]
 
   @@map("user")
 }
@@ -137,11 +138,11 @@ model Account {
   idToken               String?
   accessTokenExpiresAt  DateTime?
   refreshTokenExpiresAt DateTime?
-  scope                  String?
-  password               String?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
-  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("account")
@@ -203,9 +204,10 @@ model Company {
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 
-  prospect      Prospect?
-  signals       Signal[]
-  opportunities Opportunity[]
+  prospect            Prospect?
+  signals             Signal[]
+  opportunities       Opportunity[]
+  commercialAnalyses  CommercialAnalysis[]
 
   @@index([source])
   @@index([industry])
@@ -275,10 +277,11 @@ model Opportunity {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  signal          Signal?          @relation(fields: [signalId], references: [id], onDelete: SetNull)
-  owner           User?            @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  contactAttempts ContactAttempt[]
+  company             Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  signal              Signal?              @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  owner               User?                @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contactAttempts     ContactAttempt[]
+  commercialAnalyses CommercialAnalysis[]
 
   @@index([companyId, status])
   @@index([companyId, resolvedAt])
@@ -299,14 +302,14 @@ model ContactAttempt {
   approvedById   String?
   idempotencyKey String               @unique
   sentAt         DateTime?
-  deliveredAt   DateTime?
+  deliveredAt    DateTime?
   respondedAt    DateTime?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
   prospect    Prospect      @relation(fields: [prospectId], references: [id], onDelete: Cascade)
-  opportunity Opportunity?   @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
-  approvedBy  User?          @relation("ContactApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  opportunity Opportunity?  @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  approvedBy  User?         @relation("ContactApprover", fields: [approvedById], references: [id], onDelete: SetNull)
   conversation Conversation?
 
   @@index([prospectId, status])
@@ -373,14 +376,44 @@ model DiscoveryRun {
   createdById        String
   idempotencyKey     String             @unique
   errorCode          String?
-  errorMessage       String?
-  createdAt          DateTime           @default(now())
+  errorMessage        String?
+  createdAt           DateTime           @default(now())
 
   createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([createdById, createdAt])
   @@index([status, createdAt])
   @@map("discovery_runs")
+}
+
+model CommercialAnalysis {
+  id                       String   @id @default(cuid())
+  companyId                String
+  opportunityId            String
+  provider                 String
+  model                    String
+  generationPurpose        String   @default("FIRST_MESSAGE")
+  inputFingerprint         String
+  summary                  String
+  commercialInterpretation String
+  messageDraft             String
+  evidenceReferences       Json
+  confidence               String
+  warnings                 Json
+  status                   String   @default("SUCCESS")
+  createdById              String
+  inputTokens              Int?
+  outputTokens             Int?
+  createdAt                DateTime @default(now())
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Restrict)
+  createdBy   User        @relation("CommercialAnalysisCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, opportunityId, inputFingerprint, status, createdAt])
+  @@index([createdById, createdAt])
+  @@map("commercial_analyses")
 }
 
 model AuditLog {

@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { ACTIVE_OPPORTUNITY_WHERE } from "@/domain/opportunity-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { WebsiteAnalyzeButton } from "@/components/website-analyze-button";
+import { CommercialApproachPanel } from "@/components/commercial-approach-panel";
+import { getCommercialApproachState } from "@/server/ai/service";
 
 const SIGNAL_LABELS: Record<string, string> = {
   NO_WEBSITE: "Site não cadastrado",
@@ -98,6 +100,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   });
   if (!company) notFound();
 
+  const approachState = await getCommercialApproachState(company.id);
   const analysis = asRecord(company.websiteAnalysis);
   const analysisStatus = text(analysis?.status);
   const facts = asRecord(analysis?.facts);
@@ -105,6 +108,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   const forms = asRecord(facts?.forms);
   const technologies = asArray(facts?.technologies).map(asRecord).filter((item): item is Record<string, unknown> => item !== null);
   const currentOpportunities = company.opportunities;
+  const aiConfigured = Boolean(process.env.GEMINI_API_KEY?.trim());
 
   return (
     <div className="page">
@@ -194,6 +198,19 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
           <section className="section"><div className="section-heading"><h2>Contexto conhecido</h2></div><dl className="facts"><div className="fact"><dt>Instagram</dt><dd>{company.instagram ? `@${company.instagram}` : "Não informado"}</dd></div><div className="fact"><dt>WhatsApp</dt><dd>{company.whatsapp ?? "Não informado"}</dd></div><div className="fact"><dt>E-mail</dt><dd>{company.email ?? "Não informado"}</dd></div></dl></section>
         </aside>
       </div>
+
+      {approachState ? (
+        <CommercialApproachPanel
+          companyId={approachState.companyId}
+          prospectId={approachState.prospectId}
+          inputFingerprint={approachState.inputFingerprint}
+          activeOpportunity={approachState.activeOpportunity}
+          latestAnalysis={approachState.latestAnalysis}
+          defaultChannel={approachState.defaultChannel}
+          aiConfigured={aiConfigured}
+          suppressed={approachState.suppressed}
+        />
+      ) : null}
 
       <section className="section intelligence-section">
         <div className="section-heading"><h2>Oportunidades</h2><span className="subtle">{currentOpportunities.length}</span></div>

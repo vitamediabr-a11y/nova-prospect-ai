@@ -37,6 +37,7 @@ try {
     "_prisma_migrations",
     "account",
     "audit_logs",
+    "commercial_analyses",
     "companies",
     "contact_attempts",
     "conversations",
@@ -57,7 +58,7 @@ try {
     `SELECT table_name, column_name
      FROM information_schema.columns
      WHERE table_schema = 'public'
-       AND table_name IN ('companies', 'signals', 'opportunities', 'discovery_runs')`,
+       AND table_name IN ('companies', 'signals', 'opportunities', 'discovery_runs', 'commercial_analyses')`,
   );
   const columnNames = new Set(columns.rows.map((row) => `${row.table_name}.${row.column_name}`));
   for (const column of [
@@ -72,6 +73,12 @@ try {
     "discovery_runs.query",
     "discovery_runs.idempotencyKey",
     "discovery_runs.providerRequests",
+    "commercial_analyses.companyId",
+    "commercial_analyses.opportunityId",
+    "commercial_analyses.inputFingerprint",
+    "commercial_analyses.messageDraft",
+    "commercial_analyses.evidenceReferences",
+    "commercial_analyses.createdById",
   ]) {
     assert.ok(columnNames.has(column), `Coluna operacional ausente: ${column}`);
   }
@@ -89,6 +96,8 @@ try {
   const indexNames = new Set(indexes.rows.map((row) => row.indexname));
   for (const index of [
     "companies_dedupeKey_key",
+    "commercial_analyses_companyId_createdAt_idx",
+    "commercial_analyses_createdById_createdAt_idx",
     "contact_attempts_idempotencyKey_key",
     "conversations_contactAttemptId_key",
     "discovery_runs_idempotencyKey_key",
@@ -159,7 +168,7 @@ try {
 
     await client.query(
       `INSERT INTO "opportunities" ("id", "companyId", "dedupeKey", "problem", "evidence", "businessImpact", "recommendedSolution", "score", "scoreBreakdown", "priority", "updatedAt")
-       VALUES ('dbverify-opportunity-1', 'dbverify-company-1', 'dbverify:opportunity', 'Problema', '{}'::jsonb, 'Impacto', 'Solução', 10, '{}'::jsonb, 'LOW', NOW())`,
+       VALUES ('dbverify-opportunity-1', 'dbverify-company-1', 'dbverify:opportunity', 'Landing page + lead qualification', '{}'::jsonb, 'Impacto', 'Qualificação antes do atendimento', 78, '{"explanation":"fixture determinística"}'::jsonb, 'HIGH', NOW())`,
     );
     await expectUniqueViolation(
       () => client.query(
@@ -183,14 +192,31 @@ try {
     assert.equal(activeAfterResolve.rows[0].count, "0", "Oportunidade resolvida não pode ser operacionalmente ativa.");
 
     await client.query(
-      `UPDATE "opportunities" SET "resolvedAt" = NULL, "score" = 42, "updatedAt" = NOW() WHERE "dedupeKey" = 'dbverify:opportunity'`,
+      `UPDATE "opportunities" SET "resolvedAt" = NULL, "score" = 78, "updatedAt" = NOW() WHERE "dedupeKey" = 'dbverify:opportunity'`,
     );
     const reactivated = await client.query<{ id: string; score: number }>(
       `SELECT "id", "score" FROM "opportunities" WHERE "dedupeKey" = 'dbverify:opportunity' AND "resolvedAt" IS NULL`,
     );
     assert.equal(reactivated.rows.length, 1, "Reativação deve reutilizar a oportunidade existente.");
     assert.equal(reactivated.rows[0].id, "dbverify-opportunity-1", "Reativação não pode criar nova oportunidade.");
-    assert.equal(reactivated.rows[0].score, 42, "Reativação deve aceitar score recalculado.");
+    assert.equal(reactivated.rows[0].score, 78, "Reativação deve aceitar score recalculado.");
+
+    await client.query(
+      `INSERT INTO "commercial_analyses" ("id", "companyId", "opportunityId", "provider", "model", "inputFingerprint", "summary", "commercialInterpretation", "messageDraft", "evidenceReferences", "confidence", "warnings", "status", "createdById")
+       VALUES ('dbverify-ai-1', 'dbverify-company-1', 'dbverify-opportunity-1', 'FIXTURE', 'fixture-model', 'fixture-fingerprint', 'Resumo', 'Leitura comercial', 'Mensagem contextual de primeira abordagem com evidência suficiente.', '["opportunity:dbverify-opportunity-1"]'::jsonb, 'HIGH', '[]'::jsonb, 'SUCCESS', 'dbverify-user-1')`,
+    );
+    await client.query(
+      `UPDATE "contact_attempts"
+       SET "opportunityId" = 'dbverify-opportunity-1',
+           "evidence" = '{"source":"AI_COMMERCIAL_ANALYSIS","commercialAnalysisId":"dbverify-ai-1"}'::jsonb,
+           "updatedAt" = NOW()
+       WHERE "id" = 'dbverify-contact-1'`,
+    );
+    const preparedDraft = await client.query<{ status: string; opportunityId: string | null }>(
+      `SELECT "status", "opportunityId" FROM "contact_attempts" WHERE "id" = 'dbverify-contact-1'`,
+    );
+    assert.equal(preparedDraft.rows[0].status, "DRAFT", "Preparação por análise comercial deve permanecer DRAFT.");
+    assert.equal(preparedDraft.rows[0].opportunityId, "dbverify-opportunity-1", "Rascunho deve reutilizar a oportunidade existente.");
 
     await client.query(
       `INSERT INTO "domain_events" ("id", "type", "aggregateType", "aggregateId", "payload", "uniqueKey")
@@ -207,7 +233,7 @@ try {
     await client.query("ROLLBACK");
   }
 
-  console.log("Database verification passed: migrations, tables, discovery idempotency, lifecycle and critical uniqueness constraints are operational.");
+  console.log("Database verification passed: migrations, AI commercial analysis, DRAFT contact integration, discovery idempotency, lifecycle and critical uniqueness constraints are operational.");
 } finally {
   await client.end();
 }

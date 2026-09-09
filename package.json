@@ -17,6 +17,7 @@
     "db:bootstrap-owner": "tsx scripts/create-owner.ts"
   },
   "dependencies": {
+    "@google/genai": "^2.21.0",
     "@hookform/resolvers": "^5.2.1",
     "@prisma/adapter-pg": "^7.0.0",
     "@prisma/client": "^7.0.0",
