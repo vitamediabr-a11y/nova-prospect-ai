@@ -1,3 +1,4 @@
+import "./discovery.css";
 import Link from "next/link";
 import { DiscoveryForm } from "@/components/discovery-form";
 import { requireSession } from "@/lib/access";
