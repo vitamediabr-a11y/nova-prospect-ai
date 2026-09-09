@@ -35,12 +35,16 @@ type CompanyWebsiteContext = {
   prospect: { ownerId: string | null; lastContactAt: Date | null } | null;
 };
 
+function toJsonArray(value: unknown[]): Prisma.InputJsonArray {
+  return value.map((item) => toJsonNested(item));
+}
+
 function toJsonNested(value: unknown): Prisma.InputJsonValue | null {
   if (value === null) return null;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
-  if (Array.isArray(value)) return value.map((item) => toJsonNested(item));
+  if (Array.isArray(value)) return toJsonArray(value);
   if (typeof value === "object") {
-    const result: Prisma.InputJsonObject = {};
+    const result: Record<string, Prisma.InputJsonValue | null> = {};
     for (const [key, nested] of Object.entries(value)) {
       if (nested !== undefined) result[key] = toJsonNested(nested);
     }
@@ -50,7 +54,7 @@ function toJsonNested(value: unknown): Prisma.InputJsonValue | null {
 }
 
 function toJsonObject(value: Record<string, unknown>): Prisma.InputJsonObject {
-  const result: Prisma.InputJsonObject = {};
+  const result: Record<string, Prisma.InputJsonValue | null> = {};
   for (const [key, nested] of Object.entries(value)) {
     if (nested !== undefined) result[key] = toJsonNested(nested);
   }
@@ -204,7 +208,7 @@ async function persistWebsiteResult(input: {
       data: {
         websiteAnalysis: snapshot,
         websiteAnalyzedAt: analyzedAt,
-        technologySignals: facts ? toJsonNested(facts.technologies) : undefined,
+        technologySignals: facts ? toJsonArray(facts.technologies) : undefined,
       },
     });
 
