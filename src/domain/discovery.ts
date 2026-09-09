@@ -1,5 +1,9 @@
 import type { WebsiteAnalysisFacts } from "./website-analysis";
 
+export const DISCOVERY_MAX_CANDIDATES = 10;
+export const DISCOVERY_CONCURRENCY = 3;
+export const DISCOVERY_STALE_MINUTES = 15;
+
 const BLOCKED_HOSTS = new Set([
   "facebook.com",
   "instagram.com",
@@ -243,4 +247,13 @@ export function extractFirstPartyBusinessIdentity(input: {
 export function shouldRefreshWebsiteAnalysis(lastAnalyzedAt: Date | null, now = new Date(), staleDays = 7) {
   if (!lastAnalyzedAt) return true;
   return now.getTime() - lastAnalyzedAt.getTime() >= staleDays * 24 * 60 * 60 * 1000;
+}
+
+export function isDiscoveryRunStale(
+  run: { status: string; startedAt: Date | null },
+  now = new Date(),
+  staleMinutes = DISCOVERY_STALE_MINUTES,
+) {
+  if (run.status !== "RUNNING" || !run.startedAt) return false;
+  return now.getTime() - run.startedAt.getTime() >= staleMinutes * 60 * 1000;
 }
