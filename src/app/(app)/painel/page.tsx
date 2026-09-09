@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { ACTIVE_OPPORTUNITY_WHERE } from "@/domain/opportunity-lifecycle";
 import { prisma } from "@/lib/prisma";
 
 export default async function DashboardPage() {
   const [companies, opportunities, qualified, awaitingHuman, replies, highScore] = await Promise.all([
     prisma.company.count(),
-    prisma.opportunity.count(),
+    prisma.opportunity.count({ where: ACTIVE_OPPORTUNITY_WHERE }),
     prisma.prospect.count({ where: { stage: { in: ["QUALIFIED", "READY_FOR_CONTACT"] } } }),
     prisma.conversation.count({ where: { status: "NEEDS_HUMAN" } }),
     prisma.conversation.findMany({
@@ -14,7 +15,12 @@ export default async function DashboardPage() {
       include: { prospect: { include: { company: true } } },
     }),
     prisma.opportunity.findMany({
-      where: { status: { in: ["OPEN", "REVIEW", "READY"] }, score: { gte: 70 }, company: { doNotContact: false } },
+      where: {
+        ...ACTIVE_OPPORTUNITY_WHERE,
+        status: { in: ["OPEN", "REVIEW", "READY"] },
+        score: { gte: 70 },
+        company: { doNotContact: false },
+      },
       orderBy: [{ score: "desc" }, { createdAt: "asc" }],
       take: 5,
       include: { company: true },

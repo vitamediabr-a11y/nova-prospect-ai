@@ -94,8 +94,8 @@ model User {
 
   sessions           Session[]
   accounts           Account[]
-  ownedProspects     Prospect[]     @relation("ProspectOwner")
-  ownedOpportunities Opportunity[]  @relation("OpportunityOwner")
+  ownedProspects     Prospect[]       @relation("ProspectOwner")
+  ownedOpportunities Opportunity[]    @relation("OpportunityOwner")
   approvedContacts   ContactAttempt[] @relation("ContactApprover")
   auditLogs          AuditLog[]
 
@@ -127,11 +127,11 @@ model Account {
   idToken               String?
   accessTokenExpiresAt  DateTime?
   refreshTokenExpiresAt DateTime?
-  scope                 String?
-  password              String?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scope                  String?
+  password               String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("account")
@@ -169,26 +169,28 @@ model Icp {
 }
 
 model Company {
-  id                String        @id @default(cuid())
-  displayName       String
-  legalName         String?
-  website           String?
-  instagram         String?
-  whatsapp          String?
-  email             String?
-  location          String?
-  industry          String?
-  employeeEstimate  Int?
-  source            CompanySource
-  sourceRef         String?
-  dedupeKey         String        @unique
-  socialSignals     Json?
-  technologySignals Json?
-  doNotContact      Boolean       @default(false)
-  processingPurpose String        @default("prospeccao_b2b")
-  retentionUntil    DateTime?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  id                 String        @id @default(cuid())
+  displayName        String
+  legalName          String?
+  website            String?
+  instagram          String?
+  whatsapp           String?
+  email              String?
+  location           String?
+  industry           String?
+  employeeEstimate   Int?
+  source             CompanySource
+  sourceRef          String?
+  dedupeKey          String        @unique
+  socialSignals      Json?
+  technologySignals  Json?
+  websiteAnalysis    Json?
+  websiteAnalyzedAt  DateTime?
+  doNotContact       Boolean       @default(false)
+  processingPurpose  String        @default("prospeccao_b2b")
+  retentionUntil     DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   prospect      Prospect?
   signals       Signal[]
@@ -223,20 +225,23 @@ model Prospect {
 }
 
 model Signal {
-  id         String   @id @default(cuid())
-  companyId  String
-  type       String
-  source     String
-  confidence Float
-  evidence   Json
-  dedupeKey  String   @unique
-  detectedAt DateTime @default(now())
-  createdAt  DateTime @default(now())
+  id             String    @id @default(cuid())
+  companyId      String
+  type           String
+  source         String
+  confidence     Float
+  evidence       Json
+  dedupeKey      String    @unique
+  detectedAt     DateTime  @default(now())
+  lastObservedAt DateTime  @default(now())
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
 
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   opportunities Opportunity[]
 
   @@index([companyId, detectedAt])
+  @@index([companyId, resolvedAt])
   @@index([type])
   @@map("signals")
 }
@@ -246,6 +251,7 @@ model Opportunity {
   companyId           String
   signalId            String?
   ownerId             String?
+  dedupeKey           String?             @unique
   problem             String
   evidence            Json
   businessImpact      String
@@ -254,6 +260,7 @@ model Opportunity {
   scoreBreakdown      Json
   priority            OpportunityPriority
   status              OpportunityStatus   @default(OPEN)
+  resolvedAt          DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -263,6 +270,7 @@ model Opportunity {
   contactAttempts ContactAttempt[]
 
   @@index([companyId, status])
+  @@index([companyId, resolvedAt])
   @@index([score])
   @@index([ownerId])
   @@map("opportunities")

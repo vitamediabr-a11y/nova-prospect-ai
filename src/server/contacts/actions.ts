@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { ACTIVE_OPPORTUNITY_WHERE } from "@/domain/opportunity-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/access";
 import {
@@ -55,10 +56,14 @@ export async function createFirstContactDraft(input: CreateFirstContactInput): P
 
       if (parsed.data.opportunityId) {
         const opportunity = await tx.opportunity.findFirst({
-          where: { id: parsed.data.opportunityId, companyId: prospect.companyId },
+          where: {
+            id: parsed.data.opportunityId,
+            companyId: prospect.companyId,
+            ...ACTIVE_OPPORTUNITY_WHERE,
+          },
           select: { id: true },
         });
-        if (!opportunity) throw new ContactWorkflowError("A oportunidade não pertence a este prospect.");
+        if (!opportunity) throw new ContactWorkflowError("A oportunidade não está disponível para esta abordagem.");
       }
 
       const failedAttempts = prospect.contactAttempts.filter((attempt) => attempt.status === "FAILED").length;
