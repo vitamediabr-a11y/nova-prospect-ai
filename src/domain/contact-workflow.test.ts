@@ -6,6 +6,7 @@ import {
   assertCanMarkSent,
   assertCanRegisterResponse,
   ContactWorkflowError,
+  responseTransition,
 } from "./contact-workflow";
 
 test("blocks contact when company is marked do not contact", () => {
@@ -33,13 +34,26 @@ test("only drafts can be approved", () => {
   assert.throws(() => assertCanApproveContact("SENT", { doNotContact: false }), /Somente rascunhos/);
 });
 
-test("only approved contacts can be marked sent", () => {
-  assert.doesNotThrow(() => assertCanMarkSent("APPROVED"));
-  assert.throws(() => assertCanMarkSent("DRAFT"), /Somente mensagens aprovadas/);
+test("send boundary requires approval and re-checks suppression", () => {
+  assert.doesNotThrow(() => assertCanMarkSent("APPROVED", { doNotContact: false }));
+  assert.throws(() => assertCanMarkSent("DRAFT", { doNotContact: false }), /Somente mensagens aprovadas/);
+  assert.throws(
+    () => assertCanMarkSent("APPROVED", { doNotContact: true }),
+    /bloqueado pela regra de supressão/,
+  );
 });
 
 test("response requires an actually sent or delivered first message", () => {
   assert.doesNotThrow(() => assertCanRegisterResponse("SENT"));
   assert.doesNotThrow(() => assertCanRegisterResponse("DELIVERED"));
   assert.throws(() => assertCanRegisterResponse("APPROVED"), /após o envio/);
+});
+
+test("response transition keeps contact, prospect, conversation and opportunity consistent", () => {
+  assert.deepEqual(responseTransition("DELIVERED"), {
+    contactState: "RESPONDED",
+    prospectStage: "RESPONDED",
+    conversationStatus: "NEEDS_HUMAN",
+    opportunityStatus: "RESPONDED",
+  });
 });
