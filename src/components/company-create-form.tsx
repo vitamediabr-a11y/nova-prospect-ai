@@ -5,13 +5,17 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { createCompany } from "@/server/companies/actions";
-import { createCompanySchema, type CreateCompanyInput } from "@/server/companies/schema";
+import {
+  createCompanySchema,
+  type CreateCompanyData,
+  type CreateCompanyInput,
+} from "@/server/companies/schema";
 
 export function CompanyCreateForm() {
   const router = useRouter();
   const [serverError, setServerError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const { register, handleSubmit, formState: { errors } } = useForm<CreateCompanyInput>({
+  const { register, handleSubmit, formState: { errors } } = useForm<CreateCompanyInput, unknown, CreateCompanyData>({
     resolver: zodResolver(createCompanySchema),
     defaultValues: { displayName: "", website: "", instagram: "", whatsapp: "", email: "", location: "", industry: "" },
   });
