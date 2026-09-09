@@ -6,15 +6,23 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL não configurada para verificação do banco.");
 
 const client = new Client({ connectionString });
+let savepointCounter = 0;
 
 async function expectUniqueViolation(run: () => Promise<unknown>, label: string) {
+  const savepoint = `verify_unique_${++savepointCounter}`;
+  await client.query(`SAVEPOINT ${savepoint}`);
+
   try {
     await run();
+    await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
     assert.fail(`${label}: a duplicação deveria ter sido bloqueada pelo banco.`);
   } catch (error) {
+    await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
     if (error instanceof assert.AssertionError) throw error;
     const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
     assert.equal(code, "23505", `${label}: esperado PostgreSQL unique_violation (23505), recebido ${code || "sem código"}.`);
+  } finally {
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
   }
 }
 
