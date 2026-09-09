@@ -40,6 +40,7 @@ try {
     "companies",
     "contact_attempts",
     "conversations",
+    "discovery_runs",
     "domain_events",
     "icps",
     "opportunities",
@@ -56,19 +57,31 @@ try {
     `SELECT table_name, column_name
      FROM information_schema.columns
      WHERE table_schema = 'public'
-       AND table_name IN ('companies', 'signals', 'opportunities')`,
+       AND table_name IN ('companies', 'signals', 'opportunities', 'discovery_runs')`,
   );
   const columnNames = new Set(columns.rows.map((row) => `${row.table_name}.${row.column_name}`));
   for (const column of [
+    "companies.displayNameProvisional",
     "companies.websiteAnalysis",
     "companies.websiteAnalyzedAt",
     "signals.lastObservedAt",
     "signals.resolvedAt",
     "opportunities.dedupeKey",
     "opportunities.resolvedAt",
+    "discovery_runs.provider",
+    "discovery_runs.query",
+    "discovery_runs.idempotencyKey",
+    "discovery_runs.providerRequests",
   ]) {
-    assert.ok(columnNames.has(column), `Coluna de website intelligence ausente: ${column}`);
+    assert.ok(columnNames.has(column), `Coluna operacional ausente: ${column}`);
   }
+
+  const sourceValues = await client.query<{ enumlabel: string }>(
+    `SELECT enumlabel FROM pg_enum
+     JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+     WHERE pg_type.typname = 'CompanySource'`,
+  );
+  assert.ok(sourceValues.rows.some((row) => row.enumlabel === "WEB_SEARCH"), "CompanySource.WEB_SEARCH ausente.");
 
   const indexes = await client.query<{ indexname: string }>(
     "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
@@ -78,6 +91,7 @@ try {
     "companies_dedupeKey_key",
     "contact_attempts_idempotencyKey_key",
     "conversations_contactAttemptId_key",
+    "discovery_runs_idempotencyKey_key",
     "domain_events_uniqueKey_key",
     "opportunities_dedupeKey_key",
     "opportunities_companyId_resolvedAt_idx",
@@ -88,6 +102,10 @@ try {
   await client.query("BEGIN");
   try {
     await client.query(
+      `INSERT INTO "user" ("id", "name", "email", "updatedAt")
+       VALUES ('dbverify-user-1', 'DB Verify User', 'dbverify@example.com', NOW())`,
+    );
+    await client.query(
       `INSERT INTO "companies" ("id", "displayName", "source", "dedupeKey", "updatedAt")
        VALUES ('dbverify-company-1', 'DB Verify', 'MANUAL', 'dbverify:company', NOW())`,
     );
@@ -97,6 +115,18 @@ try {
          VALUES ('dbverify-company-2', 'DB Verify 2', 'MANUAL', 'dbverify:company', NOW())`,
       ),
       "dedupe de empresa",
+    );
+
+    await client.query(
+      `INSERT INTO "discovery_runs" ("id", "provider", "segment", "location", "query", "requestedLimit", "createdById", "idempotencyKey")
+       VALUES ('dbverify-run-1', 'BRAVE_SEARCH', 'clínica', 'Belém, PA', 'clínica Belém PA', 10, 'dbverify-user-1', 'dbverify:run')`,
+    );
+    await expectUniqueViolation(
+      () => client.query(
+        `INSERT INTO "discovery_runs" ("id", "provider", "segment", "location", "query", "requestedLimit", "createdById", "idempotencyKey")
+         VALUES ('dbverify-run-2', 'BRAVE_SEARCH', 'clínica', 'Belém, PA', 'clínica Belém PA', 10, 'dbverify-user-1', 'dbverify:run')`,
+      ),
+      "idempotência de DiscoveryRun",
     );
 
     await client.query(
@@ -177,7 +207,7 @@ try {
     await client.query("ROLLBACK");
   }
 
-  console.log("Database verification passed: migrations, tables, lifecycle and critical uniqueness constraints are operational.");
+  console.log("Database verification passed: migrations, tables, discovery idempotency, lifecycle and critical uniqueness constraints are operational.");
 } finally {
   await client.end();
 }
