@@ -1,14 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DISCOVERY_CONCURRENCY } from "./discovery";
+import type { FirstPartyBusinessIdentity } from "./discovery";
 import { BraveSearchProvider } from "@/server/discovery/providers/brave";
 import { DiscoveryProviderError, type DiscoveryProvider } from "@/server/discovery/providers/types";
+import { executeDiscoveryRunBoundary } from "@/server/discovery/run-boundary";
 import {
   CandidateVerificationError,
   executeDiscoveryPipeline,
   type DiscoveryRepository,
   type VerifiedBusiness,
 } from "@/server/discovery/service";
-import type { FirstPartyBusinessIdentity } from "./discovery";
+import { analyzeSafeWebsiteResponse } from "@/server/website/service";
 
 const identity: FirstPartyBusinessIdentity = {
   displayName: "Clínica Bem Estar",
@@ -20,6 +23,40 @@ const identity: FirstPartyBusinessIdentity = {
   email: "contato@clinicabemestar.com.br",
   whatsapp: "5591999999999",
 };
+
+function identityFor(input: {
+  hostname: string;
+  displayName?: string;
+  email?: string | null;
+  whatsapp?: string | null;
+  location?: string | null;
+}): FirstPartyBusinessIdentity {
+  return {
+    displayName: input.displayName ?? input.hostname,
+    provisional: false,
+    identitySource: "JSON_LD",
+    website: `https://${input.hostname}/`,
+    hostname: input.hostname,
+    location: input.location ?? "Belém, PA",
+    email: input.email ?? null,
+    whatsapp: input.whatsapp ?? null,
+  };
+}
+
+function analysisFor(url: string) {
+  return analyzeSafeWebsiteResponse({
+    requestedUrl: url,
+    finalUrl: url,
+    status: 200,
+    redirects: [],
+    contentType: "text/html; charset=utf-8",
+    html: "<!doctype html><html><head><title>Empresa</title></head><body>Empresa</body></html>",
+  });
+}
+
+function verifiedFor(business: FirstPartyBusinessIdentity): VerifiedBusiness {
+  return { identity: business, analysis: analysisFor(business.website) };
+}
 
 function provider(urls: string[]): DiscoveryProvider {
   return {
@@ -55,7 +92,7 @@ function memoryRepository() {
 }
 
 function verified(): Promise<VerifiedBusiness> {
-  return Promise.resolve({ identity });
+  return Promise.resolve(verifiedFor(identity));
 }
 
 test("Brave response validation extracts only transient candidate URLs", async () => {
@@ -147,7 +184,7 @@ test("unverified candidate never creates a Company", async () => {
 
 test("deterministic integration creates one Company and Prospect and invokes Website Intelligence once", async () => {
   const memory = memoryRepository();
-  let verificationCalls = 0;
+  let websiteFetches = 0;
   let intelligenceCalls = 0;
 
   const result = await executeDiscoveryPipeline({
@@ -162,12 +199,13 @@ test("deterministic integration creates one Company and Prospect and invokes Web
       "https://instagram.com/clinicabemestar",
     ]),
     verifyCandidate: async () => {
-      verificationCalls += 1;
+      websiteFetches += 1;
       return verified();
     },
     repository: memory.repository,
-    analyzeCompany: async () => {
+    analyzeCompany: async (_companyId, analysis) => {
       intelligenceCalls += 1;
+      assert.equal(analysis.facts.finalUrl, identity.website);
       memory.companies.get(identity.hostname)!.websiteAnalyzedAt = new Date("2026-09-09T12:00:00Z");
       return { ok: true };
     },
@@ -178,10 +216,89 @@ test("deterministic integration creates one Company and Prospect and invokes Web
   assert.equal(result.candidatesAccepted, 1);
   assert.equal(memory.companies.size, 1);
   assert.equal(memory.prospects.size, 1);
-  assert.equal(verificationCalls, 1);
+  assert.equal(websiteFetches, 1);
   assert.equal(intelligenceCalls, 1);
   assert.equal(memory.acceptedAudit.length, 1);
   assert.equal(JSON.stringify(memory.acceptedAudit).includes("snippet"), false);
+});
+
+test("shared WhatsApp is a soft match and does not merge distinct website identities", async () => {
+  const memory = memoryRepository();
+  const centro = identityFor({ hostname: "clinicacentro.com.br", displayName: "Clínica Centro", whatsapp: "5591999999999" });
+  const norte = identityFor({ hostname: "clinicanorte.com.br", displayName: "Clínica Norte", whatsapp: "5591999999999" });
+  const byHost = new Map([[centro.hostname, centro], [norte.hostname, norte]]);
+
+  const result = await executeDiscoveryPipeline({ query: "q", limit: 10, actorId: "u", discoveryRunId: "r" }, {
+    provider: provider([centro.website, norte.website]),
+    verifyCandidate: async (url) => verifiedFor(byHost.get(new URL(url).hostname)! ),
+    repository: memory.repository,
+    analyzeCompany: async () => ({ ok: true }),
+  });
+
+  assert.equal(result.newCompanies, 2);
+  assert.equal(memory.companies.size, 2);
+});
+
+test("shared e-mail is a soft match and does not merge distinct website identities", async () => {
+  const memory = memoryRepository();
+  const a = identityFor({ hostname: "empresa-a.com.br", displayName: "Empresa A", email: "contato@grupo.com.br" });
+  const b = identityFor({ hostname: "empresa-b.com.br", displayName: "Empresa B", email: "contato@grupo.com.br" });
+  const byHost = new Map([[a.hostname, a], [b.hostname, b]]);
+
+  const result = await executeDiscoveryPipeline({ query: "q", limit: 10, actorId: "u", discoveryRunId: "r" }, {
+    provider: provider([a.website, b.website]),
+    verifyCandidate: async (url) => verifiedFor(byHost.get(new URL(url).hostname)! ),
+    repository: memory.repository,
+    analyzeCompany: async () => ({ ok: true }),
+  });
+
+  assert.equal(result.newCompanies, 2);
+  assert.equal(memory.companies.size, 2);
+});
+
+test("www and apex variants remain one hard website identity", async () => {
+  const memory = memoryRepository();
+  let websiteFetches = 0;
+  const business = identityFor({ hostname: "empresa.com", displayName: "Empresa" });
+
+  const result = await executeDiscoveryPipeline({ query: "q", limit: 10, actorId: "u", discoveryRunId: "r" }, {
+    provider: provider(["https://empresa.com", "https://www.empresa.com/"]),
+    verifyCandidate: async () => {
+      websiteFetches += 1;
+      return verifiedFor(business);
+    },
+    repository: memory.repository,
+    analyzeCompany: async () => ({ ok: true }),
+  });
+
+  assert.equal(result.newCompanies, 1);
+  assert.equal(memory.companies.size, 1);
+  assert.equal(websiteFetches, 1);
+});
+
+test("candidate processing never exceeds bounded concurrency", async () => {
+  const memory = memoryRepository();
+  const urls = Array.from({ length: 8 }, (_, index) => `https://empresa-${index}.com.br/`);
+  let active = 0;
+  let maxActive = 0;
+
+  await executeDiscoveryPipeline({ query: "q", limit: 10, actorId: "u", discoveryRunId: "r" }, {
+    provider: provider(urls),
+    verifyCandidate: async (url) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active -= 1;
+      const hostname = new URL(url).hostname;
+      return verifiedFor(identityFor({ hostname, displayName: hostname }));
+    },
+    repository: memory.repository,
+    analyzeCompany: async () => ({ ok: true }),
+  });
+
+  assert.equal(maxActive, DISCOVERY_CONCURRENCY);
+  assert.ok(maxActive <= DISCOVERY_CONCURRENCY);
+  assert.equal(memory.companies.size, 8);
 });
 
 test("repeated discovery run reuses existing Company and skips fresh re-analysis", async () => {
@@ -227,4 +344,20 @@ test("provider failure is contained as a run-level provider error", async () => 
 
   assert.equal(result.providerError?.code, "SEARCH_PROVIDER_RATE_LIMITED");
   assert.equal(memory.companies.size, 0);
+});
+
+test("unexpected run-level failure invokes the FAILED transition boundary", async () => {
+  let markedCode: string | null = null;
+  const result = await executeDiscoveryRunBoundary({
+    execute: async () => {
+      throw new Error("unexpected internal failure");
+    },
+    markFailed: async (failure) => {
+      markedCode = failure.code;
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(markedCode, "DISCOVERY_UNEXPECTED_ERROR");
+  if (!result.ok) assert.equal(result.failure.message, "A execução da busca foi interrompida por um erro interno.");
 });
