@@ -65,6 +65,7 @@ try {
     "signals.lastObservedAt",
     "signals.resolvedAt",
     "opportunities.dedupeKey",
+    "opportunities.resolvedAt",
   ]) {
     assert.ok(columnNames.has(column), `Coluna de website intelligence ausente: ${column}`);
   }
@@ -79,8 +80,9 @@ try {
     "conversations_contactAttemptId_key",
     "domain_events_uniqueKey_key",
     "opportunities_dedupeKey_key",
+    "opportunities_companyId_resolvedAt_idx",
   ]) {
-    assert.ok(indexNames.has(index), `Índice único crítico ausente: ${index}`);
+    assert.ok(indexNames.has(index), `Índice crítico ausente: ${index}`);
   }
 
   await client.query("BEGIN");
@@ -137,6 +139,29 @@ try {
       "idempotência de oportunidade",
     );
 
+    const activeBeforeResolve = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM "opportunities" WHERE "id" = 'dbverify-opportunity-1' AND "resolvedAt" IS NULL`,
+    );
+    assert.equal(activeBeforeResolve.rows[0].count, "1", "Oportunidade nova deve começar ativa.");
+
+    await client.query(
+      `UPDATE "opportunities" SET "resolvedAt" = NOW(), "updatedAt" = NOW() WHERE "id" = 'dbverify-opportunity-1'`,
+    );
+    const activeAfterResolve = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM "opportunities" WHERE "id" = 'dbverify-opportunity-1' AND "resolvedAt" IS NULL`,
+    );
+    assert.equal(activeAfterResolve.rows[0].count, "0", "Oportunidade resolvida não pode ser operacionalmente ativa.");
+
+    await client.query(
+      `UPDATE "opportunities" SET "resolvedAt" = NULL, "score" = 42, "updatedAt" = NOW() WHERE "dedupeKey" = 'dbverify:opportunity'`,
+    );
+    const reactivated = await client.query<{ id: string; score: number }>(
+      `SELECT "id", "score" FROM "opportunities" WHERE "dedupeKey" = 'dbverify:opportunity' AND "resolvedAt" IS NULL`,
+    );
+    assert.equal(reactivated.rows.length, 1, "Reativação deve reutilizar a oportunidade existente.");
+    assert.equal(reactivated.rows[0].id, "dbverify-opportunity-1", "Reativação não pode criar nova oportunidade.");
+    assert.equal(reactivated.rows[0].score, 42, "Reativação deve aceitar score recalculado.");
+
     await client.query(
       `INSERT INTO "domain_events" ("id", "type", "aggregateType", "aggregateId", "payload", "uniqueKey")
        VALUES ('dbverify-event-1', 'dbverify.event', 'contact_attempt', 'dbverify-contact-1', '{}'::jsonb, 'dbverify:event')`,
@@ -152,7 +177,7 @@ try {
     await client.query("ROLLBACK");
   }
 
-  console.log("Database verification passed: migrations, tables and critical uniqueness constraints are operational.");
+  console.log("Database verification passed: migrations, tables, lifecycle and critical uniqueness constraints are operational.");
 } finally {
   await client.end();
 }
